@@ -16,19 +16,19 @@ pip install -q -r requirements.txt
 
 # ── M5a: Data pipeline smoke-test ────────────────────────────────────────────
 echo -e "\n[1/4] M5 — ETTh1 pipeline smoke-test …"
-python model/data.py
+python3 model/data.py
 
 # ── M3: Baseline NSight microbenchmark (wall-time only) ──────────────────────
 echo -e "\n[2/4] M3 — Baseline profiling (wall-time) …"
-python profiling/baseline_bench.py
+python3 profiling/baseline_bench.py
 
 # ── M5b: Train PatchTST baseline ─────────────────────────────────────────────
 echo -e "\n[3/4] M5 — Training PatchTST baseline …"
-python model/train.py
+python3 model/train.py
 
 # ── M5c: Evaluate baseline on test set ───────────────────────────────────────
 echo -e "\n[4/4] M5 — Evaluating on test set …"
-python model/evaluate.py
+python3 model/evaluate.py
 
 echo -e "\n═══════════════════════════════════════════════════════════════"
 echo " Phase 1 complete.  Key outputs:"
