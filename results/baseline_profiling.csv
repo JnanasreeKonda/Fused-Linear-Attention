@@ -1,0 +1,6 @@
+method,seq_len,embed_dim,n_heads,batch_size,warmup_iters,timed_iters,total_elapsed_ms,per_iter_us,peak_alloc_mb,device,gpu_name
+baseline_unfused,64,512,8,1,100,500,151.4012,302.8023,12.875,cuda,NVIDIA A100-SXM4-40GB
+baseline_unfused,128,512,8,1,100,500,152.7322,305.4643,13.625,cuda,NVIDIA A100-SXM4-40GB
+baseline_unfused,256,512,8,1,100,500,150.5569,301.1139,15.125,cuda,NVIDIA A100-SXM4-40GB
+baseline_unfused,512,512,8,1,100,500,135.151,270.3019,18.125,cuda,NVIDIA A100-SXM4-40GB
+baseline_unfused,1024,512,8,1,100,500,189.7764,379.5528,24.125,cuda,NVIDIA A100-SXM4-40GB
