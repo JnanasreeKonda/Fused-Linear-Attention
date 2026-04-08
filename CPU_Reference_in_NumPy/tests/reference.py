@@ -51,6 +51,7 @@ def run_reference_checks():
         (1, 128, 128, 64),
         (4, 256, 128, 64),
         (4, 512, 128, 64),
+        (4, 1024, 128, 64),
     ]
 
     for (B, S, d_model, d_head) in configs:
