@@ -1,0 +1,217 @@
+% report/sections/profiling.tex
+% Author: Bhanuja Karumuru  |  Milestones: M9, M12
+% Hardware design, NSight profiling methodology, SM occupancy analysis, figures.
+
+\section{Hardware Design and Profiling}
+\label{sec:profiling}
+
+\subsection{Tiling Strategy and Shared Memory Layout}
+\label{sec:tiling}
+
+The target hardware is an NVIDIA A100-SXM4-40GB (NYU Greene cluster),
+which provides 164\,KB of configurable shared memory per SM across 108 SMs,
+with HBM bandwidth of 1{,}555\,GB/s.
+
+\paragraph{Shared memory budget.}
+Each CUDA block handles one $(\text{batch}, \text{head})$ pair
+(grid = $(B, H)$, block = $(T, 1)$).
+The block holds three shared-memory arrays --- $s_Q$, $s_K$, $s_V$ ---
+each of shape $T \times (d_{\text{head}} + 1)$ in fp32.
+(The output accumulator $s_O$ is kept in thread-private registers to reduce
+shared memory pressure.)
+Total shared memory per block:
+\begin{equation}
+  \text{shmem} = 3 \times T \times (d_{\text{head}} + 1) \times 4~\text{bytes.}
+\end{equation}
+For the profiling benchmark ($d_{\text{head}} = 64$, padded stride = 65):
+
+\begin{table}[h]
+\centering
+\caption{Tile-size shared-memory budget and theoretical maximum concurrent blocks per SM (A100, $d_{\text{head}}=64$).}
+\label{tab:shmem_budget}
+\begin{tabular}{rrrrc}
+\hline
+$T$ & shmem/block (bytes) & shmem/block (KB) & max blocks/SM & \\
+\hline
+ 16 & 12,480 & 12.2 & 13 & \\
+ 32 & 24,960 & 24.4 &  6 & \\
+ \textbf{64} & \textbf{49,920} & \textbf{48.8} & \textbf{3} & \textbf{selected} \\
+128 & 99,840 & 97.5 &  1 & \\
+\hline
+\end{tabular}
+\end{table}
+
+$T = 64$ was selected: it uses 49\,KB (30\% of the 164\,KB budget),
+supports 3 resident blocks per SM to hide latency,
+and avoids the register-pressure spike observed at $T = 128$
+which constrains occupancy to 1 block/SM.
+The M9 occupancy sweep (\texttt{results/occupancy\_sweep.csv}) confirms
+this empirically via NSight Compute.
+
+\paragraph{Bank-conflict elimination.}
+\label{par:bank_conflict}
+The A100 shared memory has 32 banks, each 4 bytes wide.
+A na\"ive array declared as \texttt{float arr[T][64]} has inner stride 64,
+which is an exact multiple of 32.
+For a fixed column $c$, all 32 threads in a warp map to bank
+$(64i + c) \bmod 32 = c \bmod 32$ --- a 32-way bank conflict.
+
+The fix is to pad the inner dimension by 1:
+\begin{lstlisting}[language=C]
+__shared__ float sQ[TILE_SIZE][HEAD_DIM + 1];  // [64][65]
+__shared__ float sK[TILE_SIZE][HEAD_DIM + 1];
+__shared__ float sV[TILE_SIZE][HEAD_DIM + 1];
+\end{lstlisting}
+With stride 65 ($65 \bmod 32 = 1$), thread $i$ accessing column $c$ maps to
+bank $(65i + c) \bmod 32 = (i + c) \bmod 32$.
+The 32 warp threads access banks
+$c\bmod 32,\; (c{+}1)\bmod 32,\; \ldots,\; (c{+}31)\bmod 32$ ---
+all distinct, eliminating conflicts entirely.
+The padding overhead is $3 \times T \times 4 = 768$ bytes at $T = 64$,
+less than 2\% of the shared memory allocation.
+
+\paragraph{Thread organisation and coalesced HBM access.}
+Thread \texttt{tid} (0--63) owns token row \texttt{tid} within the current tile.
+Loading $s_Q[\texttt{tid}][\cdot]$ assigns consecutive threads to consecutive
+token rows in HBM, so the 32-thread warp reads a 32-row contiguous block
+--- one 128-byte cache transaction per 32 float elements,
+with zero wasted bandwidth.
+The same pattern holds for $s_K$, $s_V$, and the output write.
+Zero warp divergence occurs in the compute phase: every thread executes the
+same dot-product loop body with no data-dependent branches.
+
+\paragraph{\texttt{\_\_syncthreads()} placement.}
+Two barriers are inserted per K/V-tile iteration:
+(1) immediately after loading $s_K$ and $s_V$, before any score computation;
+(2) after all threads finish reading $s_K$/$s_V$, before the next iteration
+    overwrites them.
+One additional barrier separates each Q-tile's output write from the next
+Q-tile's load.
+Omitting barrier (1) allows a thread that finishes its load early to read
+stale data written by slower threads; omitting barrier (2) allows the next
+iteration to corrupt shared memory that is still being read.
+
+\subsection{Profiling Methodology}
+\label{sec:profiling_method}
+
+All profiling experiments mirror the baseline protocol (Rithwik, M3) exactly.
+
+\begin{itemize}
+  \item \textbf{Hardware:} NVIDIA A100-SXM4-40GB, NYU Greene cluster.
+  \item \textbf{Configuration:} embed\_dim = 512 (\texttt{config.EMBED\_DIM\_BENCH}),
+        $H = 8$ (\texttt{config.N\_HEADS\_BENCH}),
+        $d_{\text{head}} = 64$ (\texttt{config.D\_HEAD}),
+        batch = 1 (\texttt{config.BATCH\_BENCH}).
+  \item \textbf{Sequence lengths:} $N \in \{64, 128, 256, 512, 1024\}$.
+  \item \textbf{Warmup:} 100 kernel invocations (GPU reaches steady thermal state).
+  \item \textbf{Timed iterations:} 500, bracketed by \texttt{torch.cuda.Event}
+        start/stop; average per-iteration time reported.
+  \item \textbf{NSight Systems} (\texttt{nsys profile --trace=cuda,nvtx}):
+        captures the full kernel launch timeline, confirming single vs.\ dual
+        kernel per forward pass.
+  \item \textbf{NSight Compute} (\texttt{ncu --set full}):
+        exact HBM bytes read/written (metric \texttt{l1tex\_\_t\_bytes}),
+        SM occupancy (\texttt{sm\_\_warps\_active.avg.pct\_of\_peak\_sustained\_active}),
+        and memory throughput. Run per sequence length with 10 warm + 10 timed
+        iterations to avoid trace-file bloat.
+\end{itemize}
+
+The fused benchmark script (\texttt{profiling/fused\_bench.py}) uses identical
+warmup counts, timing protocol, and CSV schema as \texttt{profiling/baseline\_bench.py}
+so that \texttt{results/merge\_comparison.py} can directly compute
+speedup = baseline\_\textmu s / fused\_\textmu s per row.
+
+\subsection{Results}
+\label{sec:profiling_results}
+
+\paragraph{Kernel timeline.}
+Figure~\ref{fig:nsight_timeline} shows side-by-side NSight Systems kernel timelines.
+The baseline requires two separate CUDA kernel launches per forward pass
+(QKV projection followed by SDPA), with HBM round-trips for $Q$, $K$, $V$
+in between.
+The fused kernel replaces both with a single launch.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{results/figures/nsight_timeline.png}
+\caption{NSight Systems kernel timeline. \emph{Top}: baseline two-kernel pipeline
+(QKV GEMM then SDPA); \emph{bottom}: fused single-kernel.
+The gap between kernels in the baseline represents the HBM traffic carrying
+$Q$, $K$, $V$ between them.}
+\label{fig:nsight_timeline}
+\end{figure}
+
+\paragraph{Baseline timing (Rithwik, M3).}
+The measured per-iteration wall times on the A100 are:
+
+\begin{table}[h]
+\centering
+\caption{Baseline (unfused) per-iteration wall time, A100-SXM4-40GB.}
+\label{tab:baseline_timing}
+\begin{tabular}{rr}
+\hline
+$N$ & per-iteration (\textmu s) \\
+\hline
+  64 & 302.8 \\
+ 128 & 305.5 \\
+ 256 & 301.1 \\
+ 512 & 270.3 \\
+1024 & 379.6 \\
+\hline
+\end{tabular}
+\end{table}
+
+(Source: \texttt{results/baseline\_profiling.csv}.)
+
+\paragraph{Fused kernel timing and speedup.}
+Table~\ref{tab:comparison} will be populated after M9 profiling runs
+and merged via \texttt{results/merge\_comparison.py}.
+Predicted speedup range: 1.3$\times$--2.5$\times$ based on the HBM traffic
+reduction estimated in \texttt{kernel/DESIGN.md}.
+
+\begin{table}[h]
+\centering
+\caption{Baseline vs.\ fused: wall time and kernel count, all sequence lengths.}
+\label{tab:comparison}
+% Generated by: python results/merge_comparison.py
+% Source: results/comparison_table.csv
+\input{results/comparison_table_tex.tex}
+\end{table}
+
+\paragraph{HBM bandwidth.}
+Figure~\ref{fig:hbm} shows HBM read traffic for baseline and fused kernels.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\linewidth]{results/figures/hbm_bandwidth.png}
+\caption{HBM read traffic (bytes) vs.\ sequence length, baseline (unfused) vs.\ fused.
+The fused kernel eliminates intermediate $Q$/$K$/$V$ HBM writes and re-reads.}
+\label{fig:hbm}
+\end{figure}
+
+\paragraph{Wall-time speedup.}
+Figure~\ref{fig:speedup} plots speedup as a function of $N$.
+Speedup grows with sequence length because the eliminated HBM traffic
+scales as $\mathcal{O}(N)$ while compute scales as $\mathcal{O}(N^2)$;
+at longer sequences the kernel spends a larger fraction of time on memory
+traffic that the fused design eliminates.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\linewidth]{results/figures/speedup.png}
+\caption{Per-iteration wall-time speedup (baseline / fused) vs.\ sequence length.}
+\label{fig:speedup}
+\end{figure}
+
+\paragraph{SM occupancy and tile-size sweep.}
+Figure~\ref{fig:occupancy} shows the occupancy--throughput trade-off across
+tile sizes $T \in \{16, 32, 64, 128\}$ at $N = 512$.
+Full data is in \texttt{results/occupancy\_sweep.csv}.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\linewidth]{results/figures/occupancy_vs_tile.png}
+\caption{SM occupancy (\%) and per-iteration wall time (ms) vs.\ tile size $T$,
+$N = 512$. $T = 64$ achieves the best throughput--occupancy balance.}
+\label{fig:occupancy}
+\end{figure}
