@@ -36,6 +36,7 @@ import argparse
 import csv
 import os
 import sys
+import time
 
 import torch
 import torch.nn as nn
@@ -119,31 +120,37 @@ def benchmark_one(
     with torch.no_grad():
         for _ in range(warmup):
             _ = model(x)
-    torch.cuda.synchronize(device)
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
 
     # ── Timed run ─────────────────────────────────────────────────────────────
-    torch.cuda.reset_peak_memory_stats(device)
-    start = torch.cuda.Event(enable_timing=True)
-    end   = torch.cuda.Event(enable_timing=True)
-
     if _HAS_NVTX:
         nvtx.push_range(f"baseline_unfused_seq{seq_len}")
 
-    start.record()
-    with torch.no_grad():
-        for _ in range(timed):
-            _ = model(x)
-    end.record()
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        with torch.no_grad():
+            for _ in range(timed):
+                _ = model(x)
+        end.record()
+        torch.cuda.synchronize(device)
+        elapsed_ms = start.elapsed_time(end)
+        mem_stats = torch.cuda.memory_stats(device)
+        peak_mb = mem_stats.get("allocated_bytes.all.peak", 0) / (1024 ** 2)
+    else:
+        t0 = time.perf_counter()
+        with torch.no_grad():
+            for _ in range(timed):
+                _ = model(x)
+        elapsed_ms = (time.perf_counter() - t0) * 1e3
+        peak_mb = 0.0
 
     if _HAS_NVTX:
         nvtx.pop_range()
-
-    torch.cuda.synchronize(device)
-
-    elapsed_ms   = start.elapsed_time(end)
     per_iter_us  = (elapsed_ms / timed) * 1e3
-    mem_stats    = torch.cuda.memory_stats(device)
-    peak_mb      = mem_stats.get("allocated_bytes.all.peak", 0) / (1024 ** 2)
 
     return {
         "method":          "baseline_unfused",
@@ -182,7 +189,7 @@ def main():
         print(
             "[bench] WARNING: CUDA not available.\n"
             "        Wall-time numbers on CPU are meaningless for this benchmark.\n"
-            "        Run on a Greene A100 node for real profiling.\n"
+            "        This CPU fallback only validates the code path.\n"
         )
     else:
         print(f"[bench] GPU: {torch.cuda.get_device_name(device)}")

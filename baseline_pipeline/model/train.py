@@ -186,6 +186,7 @@ def main():
     parser.add_argument("--lr",          type=float, default=config.LR)
     parser.add_argument("--batch-size",  type=int,   default=config.BATCH_SIZE)
     parser.add_argument("--patience",    type=int,   default=config.PATIENCE)
+    parser.add_argument("--num-workers", type=int,   default=config.NUM_WORKERS)
     parser.add_argument("--no-cuda",     action="store_true")
     parser.add_argument("--checkpoint",  default=config.CHECKPOINT_PATH)
     parser.add_argument("--log",         default="results/baseline_training_log.csv")
@@ -201,7 +202,7 @@ def main():
         print(f"[train] GPU    : {torch.cuda.get_device_name(device)}")
 
     train_loader, val_loader, _, _, _ = get_dataloaders(
-        batch_size=args.batch_size, num_workers=config.NUM_WORKERS
+        batch_size=args.batch_size, num_workers=args.num_workers
     )
 
     model = PatchTST().to(device)

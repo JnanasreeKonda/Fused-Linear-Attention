@@ -194,21 +194,21 @@ def get_dataloaders(
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
     )
     val_loader = DataLoader(
         ETTh1Dataset(X_val, y_val),
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
     )
     test_loader = DataLoader(
         ETTh1Dataset(X_test, y_test),
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
     )
 
     return train_loader, val_loader, test_loader, mean, std

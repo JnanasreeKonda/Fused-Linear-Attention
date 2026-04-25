@@ -8,11 +8,16 @@ Team: Bhanuja · Jnanasree · Rithwik Amajala
 NYU Tandon — ECE-GY High Performance ML
 """
 
+import os
+
+BASELINE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(BASELINE_DIR)
+
 # ── Dataset ───────────────────────────────────────────────────────────────────
 DATA_URL = (
     "https://raw.githubusercontent.com/zhouhaoyi/ETDataset/main/ETT-small/ETTh1.csv"
 )
-DATA_PATH = "data/ETTh1.csv"
+DATA_PATH = os.path.join(REPO_ROOT, "data", "ETTh1.csv")
 
 INPUT_LEN     = 96    # lookback window (hours)
 FORECAST_LEN  = 96    # forecast horizon (hours)
@@ -42,8 +47,8 @@ PATIENCE       = 5       # early-stopping patience (val-loss)
 SEED           = 42
 NUM_WORKERS    = 4
 
-CHECKPOINT_DIR  = "results"
-CHECKPOINT_PATH = "results/best_baseline_model.pt"
+CHECKPOINT_DIR  = os.path.join(BASELINE_DIR, "results")
+CHECKPOINT_PATH = os.path.join(CHECKPOINT_DIR, "best_baseline_model.pt")
 
 # ── Profiling ─────────────────────────────────────────────────────────────────
 WARMUP_ITERS    = 100

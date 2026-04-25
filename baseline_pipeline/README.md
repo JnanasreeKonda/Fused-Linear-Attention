@@ -13,8 +13,9 @@ Rithwik's Phase 1 deliverables:
 |-----------|-------------|--------|
 | M3 | Baseline NSight profiling — unfused QKV + SDPA microbenchmark on A100 | Complete |
 | M5 | ETTh1 data pipeline, PatchTST model, training loop, baseline evaluation | Complete |
-| M10 | Fused kernel integration + end-to-end validation (Phase 3) | Pending M8 |
-| M11 | All result figures — NSight timeline, HBM bar charts, speedup plots | Pending M9 |
+| M9 | Fused-kernel profiling scaffold in canonical repo layout | In progress |
+| M10 | Fused kernel integration + end-to-end validation (Phase 3) | In progress |
+| M11 | All result figures — NSight timeline, HBM bar charts, speedup plots | In progress |
 
 ---
 
@@ -31,21 +32,27 @@ baseline_pipeline/
 │   ├── patchtst.py                # M5: PatchTST model with swappable attention interface
 │   ├── train.py                   # M5: training loop (Adam, CosineAnnealingLR, early stop)
 │   ├── evaluate.py                # M5: test-set MSE/MAE evaluation
-│   └── fused_attn_block.py        # M10 placeholder — Phase 3 integration hook
+│   └── fused_attn_block.py        # M10: canonical fused-kernel integration wrapper
 │
 ├── profiling/
-│   └── baseline_bench.py          # M3: 100 warmup + 500 timed iters, CUDA Events, NSight cmds
+│   ├── baseline_bench.py          # M3: 100 warmup + 500 timed iters, CUDA Events, NSight cmds
+│   └── fused_bench.py             # M9: canonical fused-kernel benchmark
 │
 ├── results/                       # Auto-generated outputs (gitignored except traces)
+│   ├── merge_comparison.py        # Merge baseline/fused profiling CSVs
+│   ├── generate_figures.py        # Build figure PNGs from canonical CSVs
 │   ├── best_baseline_model.pt     # Best checkpoint — epoch 11, val_loss=0.4779
 │   ├── baseline_training_log.csv  # Per-epoch train/val loss, 16 epochs
 │   ├── baseline_model_metrics.csv # Test MSE=180.46, MAE=12.65 (de-normalised)
 │   ├── baseline_profiling.csv     # Wall-time + peak alloc per seq_len on A100
+│   ├── fused_profiling.csv        # Fused-kernel profiling output
+│   ├── occupancy_sweep.csv        # Tile-size occupancy table
+│   ├── comparison_table.csv       # Baseline vs fused merged table
 │   ├── figures/
 │   │   └── etth1_ot_column.png    # EDA plot of OT target column
-│   └── traces/baseline/
-│       ├── baseline.nsys-rep      # NSight Systems trace — open in NSight UI
-│       └── baseline.sqlite        # NSight database
+│   └── traces/
+│       ├── baseline/              # Baseline NSight traces
+│       └── fused/                 # Fused-kernel NSight traces
 │
 └── rithwik_report.pdf             # Phase 1 report
 ```
@@ -122,6 +129,17 @@ model = PatchTST()
 from model.fused_attn_block import FusedLinearAttentionBlock
 model = PatchTST(attn_block_class=FusedLinearAttentionBlock)
 ```
+
+## Canonical layout
+
+The repo now treats these paths as the single source of truth:
+
+- root `kernel/` for CUDA kernel sources, design notes, and extension loading
+- root `tests/` for kernel correctness checks
+- `baseline_pipeline/` for benchmarking, integration, and end-to-end experiments
+
+The older `fused_linear_attention_bundle/` tree should be treated as archived
+draft material only.
 
 ---
 

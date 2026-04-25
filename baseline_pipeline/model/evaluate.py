@@ -39,6 +39,8 @@ def evaluate(
     checkpoint_path: str = config.CHECKPOINT_PATH,
     out_path: str        = "results/baseline_model_metrics.csv",
     method_name: str     = "baseline_unfused",
+    batch_size: int      = config.BATCH_SIZE,
+    num_workers: int     = config.NUM_WORKERS,
 ) -> dict:
     """
     Load best checkpoint → run on test set → compute MSE & MAE.
@@ -58,7 +60,7 @@ def evaluate(
 
     # ── Data ──────────────────────────────────────────────────────────────────
     _, _, test_loader, mean, std = get_dataloaders(
-        batch_size=config.BATCH_SIZE, num_workers=config.NUM_WORKERS
+        batch_size=batch_size, num_workers=num_workers
     )
 
     # ── Model ─────────────────────────────────────────────────────────────────
@@ -116,9 +118,16 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate baseline PatchTST on ETTh1 test set")
     parser.add_argument("--checkpoint", default=config.CHECKPOINT_PATH)
     parser.add_argument("--out",        default="results/baseline_model_metrics.csv")
+    parser.add_argument("--batch-size", type=int,   default=config.BATCH_SIZE)
+    parser.add_argument("--num-workers", type=int,  default=config.NUM_WORKERS)
     args = parser.parse_args()
 
-    evaluate(checkpoint_path=args.checkpoint, out_path=args.out)
+    evaluate(
+        checkpoint_path=args.checkpoint,
+        out_path=args.out,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+    )
 
 
 if __name__ == "__main__":

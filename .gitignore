@@ -5,9 +5,11 @@ baseline_pipeline/results/*.csv
 baseline_pipeline/results/figures/
 __pycache__/
 *.pyc
+.venv/
 .vscode/
 *.egg-info/
 .ipynb_checkpoints/
+build/
 *.aux
 *.log
 *.out
