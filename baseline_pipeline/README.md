@@ -1,150 +1,83 @@
-# baseline_pipeline
+# `baseline_pipeline/`
 
-**Owner: Rithwik Amajala** | NYU Tandon — ECE-GY High Performance ML
-**Project: FusedLinearAttention** — A Custom CUDA Kernel Fusing QKV Projection and Attention
+This folder contains the canonical model-side workflow for the project:
+dataset preparation, the PatchTST baseline, profiling scripts, results helpers,
+and the model-side fused-attention integration path.
 
----
+## What Is Here
 
-## What this folder contains
+### `config.py`
+Shared hyperparameters and stable paths used by the baseline pipeline.
 
-Rithwik's Phase 1 deliverables:
+### `model/`
+Core ETTh1 and PatchTST workflow.
 
-| Milestone | Description | Status |
-|-----------|-------------|--------|
-| M3 | Baseline NSight profiling — unfused QKV + SDPA microbenchmark on A100 | Complete |
-| M5 | ETTh1 data pipeline, PatchTST model, training loop, baseline evaluation | Complete |
-| M9 | Fused-kernel profiling scaffold in canonical repo layout | In progress |
-| M10 | Fused kernel integration + end-to-end validation (Phase 3) | In progress |
-| M11 | All result figures — NSight timeline, HBM bar charts, speedup plots | In progress |
+- `data.py`
+  - ETTh1 loading, inspection, normalization, windowing, and DataLoaders
+- `patchtst.py`
+  - PatchTST baseline with a swappable attention block interface
+- `train.py`
+  - baseline training loop
+- `evaluate.py`
+  - baseline evaluation script
+- `fused_attn_block.py`
+  - model-side wrapper for the fused kernel
 
----
+### `profiling/`
+Benchmark scripts.
 
-## Folder structure
+- `baseline_bench.py`
+  - unfused QKV + SDPA benchmark
+- `fused_bench.py`
+  - canonical fused-kernel benchmark scaffold
 
-```
-baseline_pipeline/
-├── config.py                      # Shared hyperparameters — all team use this
-├── requirements.txt               # Python dependencies
-├── run_phase1.sh                  # One-shot script: M3 + M5 end-to-end
-│
-├── model/
-│   ├── data.py                    # M5: ETTh1 download, EDA, preprocessing, DataLoaders
-│   ├── patchtst.py                # M5: PatchTST model with swappable attention interface
-│   ├── train.py                   # M5: training loop (Adam, CosineAnnealingLR, early stop)
-│   ├── evaluate.py                # M5: test-set MSE/MAE evaluation
-│   └── fused_attn_block.py        # M10: canonical fused-kernel integration wrapper
-│
-├── profiling/
-│   ├── baseline_bench.py          # M3: 100 warmup + 500 timed iters, CUDA Events, NSight cmds
-│   └── fused_bench.py             # M9: canonical fused-kernel benchmark
-│
-├── results/                       # Auto-generated outputs (gitignored except traces)
-│   ├── merge_comparison.py        # Merge baseline/fused profiling CSVs
-│   ├── generate_figures.py        # Build figure PNGs from canonical CSVs
-│   ├── best_baseline_model.pt     # Best checkpoint — epoch 11, val_loss=0.4779
-│   ├── baseline_training_log.csv  # Per-epoch train/val loss, 16 epochs
-│   ├── baseline_model_metrics.csv # Test MSE=180.46, MAE=12.65 (de-normalised)
-│   ├── baseline_profiling.csv     # Wall-time + peak alloc per seq_len on A100
-│   ├── fused_profiling.csv        # Fused-kernel profiling output
-│   ├── occupancy_sweep.csv        # Tile-size occupancy table
-│   ├── comparison_table.csv       # Baseline vs fused merged table
-│   ├── figures/
-│   │   └── etth1_ot_column.png    # EDA plot of OT target column
-│   └── traces/
-│       ├── baseline/              # Baseline NSight traces
-│       └── fused/                 # Fused-kernel NSight traces
-│
-└── rithwik_report.pdf             # Phase 1 report
-```
+### `results/`
+Canonical results area for this pipeline.
 
----
+- CSV merge and figure-generation utilities
+- profiling outputs
+- figures
+- `phase1/` deliverables folder
 
-## Quick start (on Greene A100)
+## Implemented Status
+
+Implemented here:
+
+- ETTh1 preprocessing and baseline training/evaluation flow
+- PatchTST baseline model
+- baseline profiling script
+- fused profiling scaffold in the canonical layout
+- model-side fused wrapper scaffold
+
+Partially implemented or still pending:
+
+- full GPU-backed fused-kernel validation from this pipeline
+- end-to-end fused PatchTST training with the cleaned layout
+
+## Usage
+
+### Baseline Phase 1 workflow
 
 ```bash
-# 1. Clone and enter
-git clone https://github.com/JnanasreeKonda/Fused-Linear-Attention.git
-cd Fused-Linear-Attention/baseline_pipeline
-
-# 2. Enter CUDA Singularity container
-/scratch/work/public/singularity/run-cuda-12.2.bash
-
-# 3. Install dependencies
-pip install torch --index-url https://download.pytorch.org/whl/cu122 -q
-pip install numpy pandas matplotlib tqdm -q
-
-# 4. Run Phase 1 (M3 + M5)
-chmod +x run_phase1.sh
-./run_phase1.sh
+cd baseline_pipeline
+python model/data.py
+python profiling/baseline_bench.py
+python model/train.py
+python model/evaluate.py
 ```
 
-### NSight Systems trace (M3)
+### Fused benchmark scaffold
+
 ```bash
-nsys profile \
-    --trace=cuda,nvtx \
-    --output=results/traces/baseline/baseline \
-    python profiling/baseline_bench.py
-
-# Convert to readable summary
-nsys stats --report=cuda_gpu_kern_sum \
-    results/traces/baseline/baseline.nsys-rep
+cd baseline_pipeline
+python profiling/fused_bench.py --simulate
 ```
 
----
+## Team Work Reflected In This Folder
 
-## Phase 1 Results (NVIDIA A100-SXM4-40GB)
-
-### Baseline profiling — M3
-| seq_len | per_iter (µs) | peak alloc (MB) |
-|---------|--------------|-----------------|
-| 64 | 302.8 | 12.9 |
-| 128 | 305.5 | 13.6 |
-| 256 | 301.1 | 15.1 |
-| 512 | 270.3 | 18.1 |
-| 1024 | 379.6 | 24.1 |
-
-### ETTh1 model baseline — M5
-| Metric | Value |
-|--------|-------|
-| Test MSE (de-normalised) | 180.46 |
-| Test MAE (de-normalised) | 12.65 |
-| Best val loss | 0.4779 (epoch 11) |
-| Total epochs | 16 (early stop, patience=5) |
-| Avg epoch time | ~2.17s on A100 |
-
----
-
-## Key design note — swappable attention interface
-
-`model/patchtst.py` accepts an `attn_block_class` argument. Phase 1 uses
-`StandardAttentionBlock` (3 separate `nn.Linear` projections + SDPA — the
-two-kernel baseline). Phase 3 (M10) swaps in `FusedLinearAttentionBlock`
-with zero model changes:
-
-```python
-# Phase 1 baseline
-model = PatchTST()
-
-# Phase 3 — drop-in swap (no other changes)
-from model.fused_attn_block import FusedLinearAttentionBlock
-model = PatchTST(attn_block_class=FusedLinearAttentionBlock)
-```
-
-## Canonical layout
-
-The repo now treats these paths as the single source of truth:
-
-- root `kernel/` for CUDA kernel sources, design notes, and extension loading
-- root `tests/` for kernel correctness checks
-- `baseline_pipeline/` for benchmarking, integration, and end-to-end experiments
-
-The older `fused_linear_attention_bundle/` tree should be treated as archived
-draft material only.
-
----
-
-## Hardware & software
-- **GPU**: NVIDIA A100-SXM4-40GB (NYU Greene cluster)
-- **CUDA**: 12.2
-- **PyTorch**: 2.x
-- **Dataset**: ETTh1 — 17,420 hourly rows, 7 features, 0 missing values
+- Rithwik Amajala
+  - ETTh1 pipeline, PatchTST baseline, baseline profiling, training, evaluation
+- Bhanuja Karumuru
+  - fused benchmark/results scaffolding used for profiling comparisons
+- Jnanasree Konda
+  - kernel interface assumptions that the fused wrapper and correctness flow rely on
