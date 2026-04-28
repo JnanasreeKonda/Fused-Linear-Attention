@@ -52,12 +52,31 @@ Implemented in the repo:
 - canonical fused-kernel source, binding, and benchmark scaffold
 - canonical correctness suite and NumPy oracle
 - merged results/figure generation scripts
+- model-side fused attention wrapper with a safe fallback path
 
 Still partial or pending:
 
 - real GPU validation of the fused kernel in this cleaned layout
-- full end-to-end fused PatchTST training run
-- support for model-side `d_head=32` in the current fused integration path
+- full end-to-end fused PatchTST training run using the compiled kernel path
+- kernel generalization beyond the benchmark-oriented `d_head=64` fused path
+
+## Phase 2 and Phase 3 Tasks Finished On This Branch
+
+### Phase 2
+
+- root-level NumPy oracle in `tests/reference.py`
+- stacked-QKV oracle path to mirror a fused projection interface
+- canonical correctness runner in `tests/test_correctness.py`
+- quick correctness mode for fast smoke testing
+- correctness CSV output directed into `baseline_pipeline/results/`
+- canonical extension loader in `kernel/load_kernel.py`
+
+### Phase 3
+
+- model-side `FusedLinearAttentionBlock` wrapper in `baseline_pipeline/model/fused_attn_block.py`
+- safe fallback to PyTorch SDPA during training, CPU runs, or unsupported head sizes
+- compiled-kernel path for CUDA eval / no-grad execution when `d_head == 64`
+- `baseline_pipeline/run_phase23.sh` helper script for the Phase 2 / 3 validation flow
 
 ## Team Contributions
 
@@ -85,3 +104,79 @@ Still partial or pending:
 - Folder-level READMEs describe each component in more detail.
 - Local scratch outputs at the repo root should not be treated as official
   deliverables; canonical outputs belong under `baseline_pipeline/results/`.
+
+## How To Run
+
+### Baseline Phase 1 flow
+
+```bash
+cd baseline_pipeline
+chmod +x run_phase1.sh
+./run_phase1.sh
+```
+
+### Phase 2 and Phase 3 simulation flow
+
+This path does not require the compiled CUDA kernel:
+
+```bash
+cd baseline_pipeline
+chmod +x run_phase23.sh
+./run_phase23.sh
+```
+
+### Root correctness checks
+
+Quick simulation:
+
+```bash
+python3 tests/test_correctness.py --simulate --quick --use-root-oracle
+```
+
+Quick CUDA-backed run:
+
+```bash
+python3 tests/test_correctness.py --quick
+```
+
+Full CUDA-backed run:
+
+```bash
+python3 tests/test_correctness.py
+```
+
+Expected output:
+
+```bash
+baseline_pipeline/results/correctness_results.csv
+```
+
+### Fused benchmark flow
+
+Simulation:
+
+```bash
+cd baseline_pipeline
+python3 profiling/fused_bench.py --simulate
+```
+
+CUDA-backed:
+
+```bash
+cd baseline_pipeline
+python3 profiling/fused_bench.py
+```
+
+### PatchTST with the fused wrapper
+
+```python
+from baseline_pipeline.model.patchtst import PatchTST
+from baseline_pipeline.model.fused_attn_block import FusedLinearAttentionBlock
+
+model = PatchTST(attn_block_class=FusedLinearAttentionBlock)
+```
+
+Behavior today:
+
+- training: PyTorch fallback path
+- eval on CUDA with `torch.no_grad()` and `d_head == 64`: compiled fused kernel path

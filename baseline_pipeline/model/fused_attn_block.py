@@ -18,6 +18,7 @@ import sys
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if REPO_ROOT not in sys.path:
@@ -54,6 +55,18 @@ class FusedLinearAttentionBlock(nn.Module):
         nn.init.xavier_uniform_(self.Wk)
         nn.init.xavier_uniform_(self.Wv)
 
+    def _reference_forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Correct fallback path for training, CPU runs, and unsupported head sizes."""
+        B, S, D = x.shape
+        H, d = self.n_heads, self.d_head
+        Q = (x @ self.Wq).view(B, S, H, d).transpose(1, 2)
+        K = (x @ self.Wk).view(B, S, H, d).transpose(1, 2)
+        V = (x @ self.Wv).view(B, S, H, d).transpose(1, 2)
+        drop_p = self.dropout if self.training else 0.0
+        out = F.scaled_dot_product_attention(Q, K, V, dropout_p=drop_p)
+        out = out.transpose(1, 2).contiguous().view(B, S, D)
+        return self.out_proj(out)
+
     def _load_kernel(self):
         """JIT-compile and cache the CUDA extension (first call only)."""
         if self._kernel is None:
@@ -67,16 +80,18 @@ class FusedLinearAttentionBlock(nn.Module):
                     f"Original error: {exc}"
                 )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.d_head != 64:
-            raise RuntimeError(
-                "The current fused kernel is compiled for d_head=64 only. "
-                f"Received d_head={self.d_head}. "
-                "Either generalize kernel/load_kernel.py for multiple head "
-                "dimensions or use the benchmark configuration for fused runs."
-            )
+    def _can_use_kernel(self, x: torch.Tensor) -> bool:
         if x.device.type != "cuda":
-            raise RuntimeError("FusedLinearAttentionBlock requires CUDA input tensors.")
+            return False
+        if self.d_head != 64:
+            return False
+        if self.training or torch.is_grad_enabled():
+            return False
+        return True
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self._can_use_kernel(x):
+            return self._reference_forward(x)
 
         self._load_kernel()
         B, S, D = x.shape

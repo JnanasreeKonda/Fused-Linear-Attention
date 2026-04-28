@@ -10,6 +10,31 @@ from __future__ import annotations
 import numpy as np
 
 
+def split_qkv_weight(W_qkv: np.ndarray):
+    """
+    Split a stacked fused-projection weight matrix into Q/K/V components.
+
+    Parameters
+    ----------
+    W_qkv:
+        Array with shape (3 * d_model, d_model), matching the PyTorch
+        `F.linear(x, weight)` layout for a stacked QKV projection.
+    """
+    W_qkv = np.asarray(W_qkv, dtype=np.float32)
+    if W_qkv.ndim != 2:
+        raise ValueError(f"W_qkv must be 2-D, got shape {W_qkv.shape}")
+    if W_qkv.shape[0] % 3 != 0:
+        raise ValueError(f"First dimension of W_qkv must be divisible by 3, got {W_qkv.shape}")
+
+    d_model = W_qkv.shape[1]
+    if W_qkv.shape[0] != 3 * d_model:
+        raise ValueError(
+            f"W_qkv must have shape (3 * d_model, d_model), got {W_qkv.shape}"
+        )
+
+    return np.split(W_qkv, 3, axis=0)
+
+
 def softmax(x, axis=-1):
     x = x - np.max(x, axis=axis, keepdims=True)
     e = np.exp(x)
@@ -44,28 +69,79 @@ def fused_qkv_attention_reference(
     return O, Q, K, V, attn_weights
 
 
+def fused_attention_reference(X, W_qkv, n_heads):
+    """
+    Canonical root-level oracle for fused projection + attention.
+
+    Parameters
+    ----------
+    X:
+        Input activations with shape (B, S, D).
+    W_qkv:
+        Stacked QKV projection weight with shape (3D, D).
+    n_heads:
+        Number of attention heads. The current NumPy oracle uses this for input
+        validation and to mirror the model-side interface even though the
+        single-matmul formulation returns a merged `(B, S, D)` output.
+    """
+    X = np.asarray(X, dtype=np.float32)
+    if X.ndim != 3:
+        raise ValueError(f"X must have shape (B, S, D), got {X.shape}")
+
+    batch, seq_len, d_model = X.shape
+    if d_model % n_heads != 0:
+        raise ValueError(f"d_model={d_model} must be divisible by n_heads={n_heads}")
+
+    d_head = d_model // n_heads
+    W_q, W_k, W_v = split_qkv_weight(W_qkv)
+
+    Q = (X @ W_q.T).reshape(batch, seq_len, n_heads, d_head).transpose(0, 2, 1, 3)
+    K = (X @ W_k.T).reshape(batch, seq_len, n_heads, d_head).transpose(0, 2, 1, 3)
+    V = (X @ W_v.T).reshape(batch, seq_len, n_heads, d_head).transpose(0, 2, 1, 3)
+
+    scores = (Q @ K.transpose(0, 1, 3, 2)) / np.sqrt(np.float32(d_head))
+    attn_weights = softmax(scores, axis=-1).astype(np.float32, copy=False)
+    out = attn_weights @ V
+    out = out.transpose(0, 2, 1, 3).reshape(batch, seq_len, d_model)
+    return out.astype(np.float32, copy=False)
+
+
 def run_reference_checks():
     np.random.seed(42)
 
     configs = [
-        (1, 64, 128, 64),
-        (1, 128, 128, 64),
-        (4, 256, 128, 64),
-        (4, 512, 128, 64),
-        (4, 1024, 128, 64),
+        (1, 64, 128, 64, 1),
+        (1, 128, 128, 64, 1),
+        (4, 256, 128, 64, 1),
+        (4, 512, 128, 64, 1),
+        (2, 64, 128, 64, 2),
     ]
 
-    for (B, S, d_model, d_head) in configs:
+    for (B, S, d_model, d_head, n_heads) in configs:
         X = np.random.randn(B, S, d_model).astype(np.float32)
         W_q = np.random.randn(d_model, d_head).astype(np.float32) * 0.02
         W_k = np.random.randn(d_model, d_head).astype(np.float32) * 0.02
         W_v = np.random.randn(d_model, d_head).astype(np.float32) * 0.02
 
         O, _, _, _, weights = fused_qkv_attention_reference(X, W_q, W_k, W_v)
-
         assert O.shape == (B, S, d_head), f"Wrong output shape: {O.shape}"
         assert not np.any(np.isnan(O)), "NaN in output"
         assert not np.any(np.isinf(O)), "Inf in output"
+
+        if n_heads == 1:
+            W_qkv = np.concatenate([W_q.T, W_k.T, W_v.T], axis=0)
+            fused_out = fused_attention_reference(X, W_qkv, n_heads=1)
+            assert np.allclose(O, fused_out, atol=1e-5), "Stacked oracle must match split reference"
+        else:
+            W_q_full = np.random.randn(d_model, d_model).astype(np.float32) * 0.02
+            W_k_full = np.random.randn(d_model, d_model).astype(np.float32) * 0.02
+            W_v_full = np.random.randn(d_model, d_model).astype(np.float32) * 0.02
+            W_qkv = np.concatenate([W_q_full, W_k_full, W_v_full], axis=0)
+            fused_out = fused_attention_reference(X, W_qkv, n_heads=n_heads)
+            expected_shape = (B, S, d_model)
+            assert fused_out.shape == expected_shape, f"Wrong stacked output shape: {fused_out.shape}"
+            assert not np.any(np.isnan(fused_out)), "NaN in stacked oracle output"
+            assert not np.any(np.isinf(fused_out)), "Inf in stacked oracle output"
 
         weight_sums = weights.sum(axis=-1)
         assert np.allclose(weight_sums, 1.0, atol=1e-5), (
