@@ -22,6 +22,10 @@ Core ETTh1 and PatchTST workflow.
   - baseline evaluation script
 - `fused_attn_block.py`
   - model-side wrapper for the fused kernel
+- `end_to_end_validate.py`
+  - Phase 3 validation and timing driver
+- `attention_utils.py`
+  - checkpoint conversion and attention-class helpers
 
 ### `profiling/`
 Benchmark scripts.
@@ -49,6 +53,7 @@ Implemented here:
 - fused profiling scaffold in the canonical layout
 - model-side fused wrapper with a functional fallback path
 - Phase 2 / 3 helper script in `run_phase23.sh`
+- Phase 3 validation pipeline in `run_phase3.sh` and `model/end_to_end_validate.py`
 
 Partially implemented or still pending:
 
@@ -81,6 +86,19 @@ cd baseline_pipeline
 chmod +x run_phase23.sh
 ./run_phase23.sh
 ```
+
+### Phase 3 workflow (M10 + M11)
+
+```bash
+cd baseline_pipeline
+python model/end_to_end_validate.py --no-cuda
+python results/merge_comparison.py
+python results/generate_figures.py
+```
+
+On a CUDA node with a working driver/toolchain, replace `--no-cuda` with
+`--train-fused` to retrain the fused attention path and emit the Phase 3
+timing/validation artifacts.
 
 ## Team Work Reflected In This Folder
 
