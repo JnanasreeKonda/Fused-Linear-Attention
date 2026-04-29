@@ -1,87 +1,167 @@
 # FusedLinearAttention
 
-FusedLinearAttention is a course project on fusing QKV projection and scaled
-dot-product attention into a single CUDA kernel for transformer inference.
-The repository is organized around the pieces that are actually implemented:
-the baseline ETTh1 pipeline, the fused-kernel code path, and the correctness
-and profiling utilities used to compare them.
+FusedLinearAttention is a course project on reducing transformer inference
+overhead by fusing QKV projection and scaled dot-product attention into a
+single CUDA kernel. The repository contains three major pieces:
 
-## Repository Layout
+- a working ETTh1 + PatchTST baseline pipeline
+- a canonical custom CUDA kernel and PyTorch extension path
+- correctness, benchmarking, and figure-generation utilities used to compare
+  the fused path against the unfused baseline
+
+## Project Goal
+
+The project targets the standard two-stage attention path:
+
+1. separate Q, K, and V projections that write intermediate tensors to HBM
+2. attention that reads those tensors back from HBM
+
+The fused kernel path aims to reduce kernel launches and external memory
+traffic by combining these stages into a single implementation for the
+benchmark configuration.
+
+## Repository Structure
 
 ### `baseline_pipeline/`
-End-to-end model, data, profiling, and results code.
 
 - ETTh1 preprocessing and DataLoaders
 - PatchTST baseline model
-- baseline training and evaluation
-- baseline and fused benchmark scripts
-- canonical results, plots, and Phase 1 deliverables
+- baseline training and evaluation scripts
+- baseline and fused benchmark entrypoints
+- result-merging and figure-generation helpers
 
 ### `kernel/`
-Canonical fused-kernel implementation and loader.
 
-- CUDA kernel source
+- canonical CUDA kernel source
 - PyTorch C++ extension binding
-- kernel loading logic
+- JIT loader
 - tiling and shared-memory design notes
 
 ### `tests/`
-Canonical root-level correctness checks.
 
-- NumPy oracle used by the consolidated repo
-- fused-kernel correctness suite
+- canonical correctness checks
+- NumPy-backed reference comparison
 
 ### `CPU_Reference_in_NumPy/`
-Original NumPy reference implementation and golden outputs.
 
-- reference implementation used to generate trusted outputs
-- PyTorch comparison test
-- saved golden `.npy` artifacts
+- original NumPy oracle
+- PyTorch-vs-NumPy comparison test
+- golden `.npy` outputs
 
 ### `data/`
-Dataset storage.
 
 - `ETTh1.csv`
 
-## Current Implementation Status
+## Milestones And Status
 
-Implemented in the repo:
+| Milestone | Status | Notes |
+| --- | --- | --- |
+| Dataset setup and ETTh1 preprocessing | Complete | Canonical ETTh1 pipeline is in `baseline_pipeline/model/data.py`. |
+| Baseline PatchTST model | Complete | Training and evaluation flow is implemented. |
+| Baseline profiling | Complete | `baseline_pipeline/profiling/baseline_bench.py` produces the unfused benchmark CSV. |
+| NumPy oracle and golden outputs | Complete | Reference implementation and saved outputs are present. |
+| Canonical kernel source and binding | Complete | CUDA source, C++ binding, and loader are in `kernel/`. |
+| Root correctness workflow | Complete | Root `tests/` path is the source of truth for correctness checks. |
+| Fused profiling pipeline | Complete | Fused benchmark, CSV merge, and figure generation are implemented. |
+| Real compiled-kernel GPU validation | Partial | Environment-dependent; simulation fallback works, but compiled-kernel runs require a compatible CUDA toolchain. |
+| End-to-end fused PatchTST validation | Partial | The current fused path remains specialized and is not yet a complete drop-in replacement for all model settings. |
 
-- baseline ETTh1 pipeline and PatchTST training/evaluation
-- baseline profiling workflow
-- canonical fused-kernel source, binding, and benchmark scaffold
-- canonical correctness suite and NumPy oracle
-- merged results/figure generation scripts
+## How To Run
 
-Still partial or pending:
+### Baseline pipeline
 
-- real GPU validation of the fused kernel in this cleaned layout
-- full end-to-end fused PatchTST training run
-- support for model-side `d_head=32` in the current fused integration path
+```bash
+cd baseline_pipeline
+python model/data.py
+python profiling/baseline_bench.py
+python model/train.py
+python model/evaluate.py
+```
+
+### Correctness
+
+```bash
+python tests/test_correctness.py
+python tests/test_correctness.py --simulate
+```
+
+### Fused profiling pipeline
+
+```bash
+cd baseline_pipeline
+./run_bhanuja.sh --simulate
+```
+
+On a machine where the CUDA extension compiles successfully:
+
+```bash
+cd baseline_pipeline
+./run_bhanuja.sh
+```
+
+## Results
+
+Canonical outputs live under `baseline_pipeline/results/`.
+
+Important files:
+
+- `baseline_profiling.csv`
+- `fused_profiling.csv`
+- `comparison_table.csv`
+- `occupancy_sweep.csv`
+- `figures/hbm_bandwidth.png`
+- `figures/speedup.png`
+- `figures/occupancy_vs_tile.png`
+- `figures/kernel_count.png`
+
+The fused profiling CSV includes a `run_mode` column so simulation-mode runs
+and real CUDA-kernel runs are distinguishable in the repo and in the final
+report.
+
+## Observations
+
+- The baseline ETTh1 and PatchTST pipeline is runnable and benchmarkable from
+  the cleaned repository layout.
+- The fused benchmarking workflow is automated end to end: benchmark, merge,
+  and figure generation all run from canonical paths.
+- The correctness framework is also automated and can fall back to simulation
+  when the compiled extension is unavailable.
+- Final fused-kernel performance claims should only be made from runs where
+  `run_mode=cuda_kernel`. Simulation-mode outputs validate the workflow, but
+  they are not substitutes for compiled-kernel measurements.
+
+## Limitations
+
+- The kernel is currently specialized for the benchmark path with
+  `HEAD_DIM=64`.
+- Full end-to-end fused PatchTST support remains partial because the baseline
+  model configuration uses a different head dimension.
+- On some shared GPU environments, the custom CUDA extension may fail to build
+  due to CUDA toolkit and host compiler incompatibilities. The repo preserves a
+  simulation path so correctness and reporting workflows can still be exercised.
 
 ## Team Contributions
 
 ### Jnanasree Konda
 
 - NumPy fused-attention reference workflow and golden-output generation
-- correctness-oriented testing artifacts and validation logic
+- correctness-oriented validation logic
 - PyTorch extension binding interface for the fused kernel
 
 ### Bhanuja Karumuru
 
-- kernel tiling strategy and hardware-efficiency design
+- fused kernel tiling strategy and hardware-efficiency design
 - fused CUDA kernel implementation in the canonical `kernel/` path
-- fused profiling, comparison-table, and figure-generation scaffolding
+- profiling pipeline, comparison-table merge, and figure-generation workflow
 
 ### Rithwik Amajala
 
 - ETTh1 preprocessing pipeline and dataset handling
 - PatchTST baseline model, training loop, and evaluation workflow
-- baseline profiling workflow and model-side fused wrapper/integration scaffold
+- baseline profiling workflow and model-side fused wrapper scaffold
 
 ## Notes
 
-- `main` now uses the canonical layout above.
+- `main` uses the canonical repo layout.
 - Folder-level READMEs describe each component in more detail.
-- Local scratch outputs at the repo root should not be treated as official
-  deliverables; canonical outputs belong under `baseline_pipeline/results/`.
+- Canonical deliverables belong under `baseline_pipeline/results/`.
