@@ -72,11 +72,18 @@ python model/train.py
 python model/evaluate.py
 ```
 
-### Fused benchmark scaffold
+### Fused profiling workflow
 
 ```bash
 cd baseline_pipeline
-python profiling/fused_bench.py --simulate
+./run_bhanuja.sh --simulate
+```
+
+On a compatible CUDA build environment:
+
+```bash
+cd baseline_pipeline
+./run_bhanuja.sh
 ```
 
 ### Phase 2 / 3 validation helper
@@ -108,3 +115,12 @@ timing/validation artifacts.
   - fused benchmark/results scaffolding used for profiling comparisons
 - Jnanasree Konda
   - kernel interface assumptions that the fused wrapper and correctness flow rely on
+
+## Notes
+
+- `run_bhanuja.sh` is the recommended entrypoint for the fused benchmarking
+  workflow.
+- `baseline_pipeline/results/` is the canonical home for benchmark CSVs,
+  comparison tables, generated figures, and preserved deliverables.
+- Treat fused results as final performance evidence only when
+  `fused_profiling.csv` shows `run_mode=cuda_kernel`.
