@@ -52,6 +52,16 @@ def load_comparison_table():
     return seq_lens, baseline, fused
 
 
+def dominant_run_mode(fused_rows):
+    modes = [row.get("run_mode", "") for row in fused_rows.values()]
+    non_empty = [mode for mode in modes if mode]
+    if not non_empty:
+        return "unknown"
+    if all(mode == non_empty[0] for mode in non_empty):
+        return non_empty[0]
+    return "mixed"
+
+
 def load_occupancy_sweep():
     path = os.path.join(RESULTS_DIR, "occupancy_sweep.csv")
     if not os.path.exists(path):
@@ -153,8 +163,12 @@ def plot_occupancy_vs_tile(sweep_rows):
     tile_sizes = [int(r["tile_size"]) for r in rows_512]
     shmem_kb = [float(r["shmem_per_block_KB"]) for r in rows_512]
     max_blocks = [int(r["theoretical_max_blocks_SM"]) for r in rows_512]
+    occupancy = [safe_float(r, "SM_occupancy_pct") for r in rows_512]
+    wall_times = [safe_float(r, "wall_time_ms") for r in rows_512]
+    has_real_occ = any(v is not None for v in occupancy)
+    has_real_time = any(v is not None for v in wall_times)
 
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4))
 
     axes[0].bar(tile_sizes, shmem_kb, color=COLOR_FUSED)
     axes[0].set_xlabel("Tile size")
@@ -165,6 +179,29 @@ def plot_occupancy_vs_tile(sweep_rows):
     axes[1].set_xlabel("Tile size")
     axes[1].set_ylabel("Theoretical max blocks / SM")
     axes[1].set_title("Block Residency by Tile Size")
+
+    ax3 = axes[2]
+    if has_real_occ or has_real_time:
+        if has_real_occ:
+            occ_x = [t for t, v in zip(tile_sizes, occupancy) if v is not None]
+            occ_y = [v for v in occupancy if v is not None]
+            ax3.plot(occ_x, occ_y, "o-", color=COLOR_FUSED, linewidth=2, label="SM occupancy (%)")
+        if has_real_time:
+            time_x = [t for t, v in zip(tile_sizes, wall_times) if v is not None]
+            time_y = [v for v in wall_times if v is not None]
+            ax3.plot(time_x, time_y, "s--", color=COLOR_BASELINE, linewidth=2, label="Wall time (ms)")
+        ax3.legend()
+    else:
+        ax3.text(
+            0.5,
+            0.5,
+            "Fill wall_time_ms and\nSM_occupancy_pct after\nGPU profiling",
+            ha="center",
+            va="center",
+            transform=ax3.transAxes,
+        )
+    ax3.set_xlabel("Tile size")
+    ax3.set_title("Measured Occupancy / Wall Time")
 
     fig.tight_layout()
     fig.savefig(os.path.join(FIGURES_DIR, "occupancy_vs_tile.png"), dpi=150, bbox_inches="tight")
@@ -192,11 +229,13 @@ def plot_kernel_count(seq_lens):
 def main():
     seq_lens, baseline, fused = load_comparison_table()
     sweep_rows = load_occupancy_sweep()
+    run_mode = dominant_run_mode(fused)
     plot_hbm_bandwidth(seq_lens, baseline, fused)
     plot_speedup(seq_lens, baseline, fused)
     plot_occupancy_vs_tile(sweep_rows)
     plot_kernel_count(seq_lens)
     print(f"Saved figures to: {FIGURES_DIR}")
+    print(f"Fused run mode: {run_mode}")
 
 
 if __name__ == "__main__":

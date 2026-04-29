@@ -51,7 +51,20 @@ def main():
         f_time = safe_float(f, "per_iter_us")
         speedup = round(b_time / f_time, 4) if (b_time and f_time and f_time > 0) else ""
 
+        # Baseline benchmark currently does not write explicit HBM estimates.
+        # Use the same benchmark config to derive a theoretical baseline value.
         b_hbm = safe_float(b, "HBM_read_bytes_est")
+        if b_hbm is None:
+            batch_size = int(b.get("batch_size", 1))
+            embed_dim = int(b.get("embed_dim", 512))
+            n_heads = int(b.get("n_heads", 8))
+            d_head = embed_dim // n_heads
+            fp32_bytes = 4
+            b_hbm = (
+                batch_size * seq_len * embed_dim
+                + 3 * batch_size * n_heads * seq_len * d_head * 2
+            ) * fp32_bytes
+
         f_hbm = safe_float(f, "HBM_read_bytes_est")
         hbm_reduction = (
             round((1.0 - f_hbm / b_hbm) * 100, 2)
@@ -63,6 +76,7 @@ def main():
             output_rows.append(
                 {
                     "method": method,
+                    "run_mode": row.get("run_mode", "baseline" if not is_fused else "unknown"),
                     "seq_len": seq_len,
                     "embed_dim": row.get("embed_dim", 512),
                     "n_heads": row.get("n_heads", 8),
@@ -73,7 +87,7 @@ def main():
                     "per_iter_us": row.get("per_iter_us"),
                     "peak_alloc_mb": row.get("peak_alloc_mb"),
                     "kernel_count": row.get("kernel_count", "1" if is_fused else "2"),
-                    "HBM_read_bytes_est": row.get("HBM_read_bytes_est"),
+                    "HBM_read_bytes_est": row.get("HBM_read_bytes_est", b_hbm if not is_fused else ""),
                     "HBM_write_bytes_est": row.get("HBM_write_bytes_est"),
                     "device": row.get("device"),
                     "gpu_name": row.get("gpu_name"),
@@ -88,6 +102,17 @@ def main():
         writer.writerows(output_rows)
 
     print(f"Saved: {out_path}")
+    print()
+    print("Summary:")
+    for row in output_rows:
+        if row["method"] != "fused_kernel":
+            continue
+        print(
+            f"  seq_len={row['seq_len']:>4}  "
+            f"mode={row['run_mode']:<11}  "
+            f"speedup={row['speedup_vs_baseline'] or 'N/A':>6}  "
+            f"hbm_reduction={row['HBM_read_reduction_pct'] or 'N/A'}%"
+        )
 
 
 if __name__ == "__main__":
