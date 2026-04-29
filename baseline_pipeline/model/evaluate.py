@@ -23,10 +23,15 @@ import sys
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
+from model.attention_utils import (
+    convert_state_dict_for_attention,
+    infer_attention_from_state_dict,
+    normalize_attention_name,
+    resolve_attention_block,
+)
 from model.data import get_dataloaders, FEATURE_COLS, OT_IDX
 from model.patchtst import PatchTST
 
@@ -37,10 +42,13 @@ from model.patchtst import PatchTST
 
 def evaluate(
     checkpoint_path: str = config.CHECKPOINT_PATH,
-    out_path: str        = "results/baseline_model_metrics.csv",
-    method_name: str     = "baseline_unfused",
-    batch_size: int      = config.BATCH_SIZE,
-    num_workers: int     = config.NUM_WORKERS,
+    out_path: str = config.BASELINE_METRICS_PATH,
+    method_name: str = "baseline_unfused",
+    batch_size: int = config.BATCH_SIZE,
+    num_workers: int = config.NUM_WORKERS,
+    attention: str = "standard",
+    checkpoint_format: str = "auto",
+    no_cuda: bool = False,
 ) -> dict:
     """
     Load best checkpoint → run on test set → compute MSE & MAE.
@@ -49,7 +57,10 @@ def evaluate(
     -------
     {"method": str, "mse": float, "mae": float}
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    attention = normalize_attention_name(attention)
+    device = torch.device(
+        "cpu" if (no_cuda or not torch.cuda.is_available()) else "cuda"
+    )
     print(f"[evaluate] Device: {device}")
 
     if not os.path.exists(checkpoint_path):
@@ -64,14 +75,38 @@ def evaluate(
     )
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    model = PatchTST().to(device)
-    ckpt  = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(ckpt["model_state"])
+    attn_block_class = resolve_attention_block(attention)
+    model = PatchTST(attn_block_class=attn_block_class).to(device)
+    ckpt = torch.load(checkpoint_path, map_location=device)
+    state_dict = ckpt["model_state"]
+    source_attention = ckpt.get("attention_type") or ckpt.get("config", {}).get("attention_type")
+    if checkpoint_format != "auto":
+        source_attention = normalize_attention_name(checkpoint_format)
+    else:
+        source_attention = source_attention or infer_attention_from_state_dict(state_dict)
+
+    if source_attention == "unknown":
+        raise RuntimeError(
+            "Could not infer checkpoint attention format. "
+            "Pass --checkpoint-format standard|fused."
+        )
+
+    state_dict = convert_state_dict_for_attention(
+        state_dict,
+        source_attention=source_attention,
+        target_attention=attention,
+    )
+    model.load_state_dict(state_dict)
     model.eval()
     print(
         f"[evaluate] Checkpoint  epoch={ckpt['epoch']}  "
         f"val_loss={ckpt['val_loss']:.6f}"
     )
+    if source_attention != attention:
+        print(
+            f"[evaluate] Converted checkpoint attention: "
+            f"{source_attention} -> {attention}"
+        )
 
     # ── Inference ─────────────────────────────────────────────────────────────
     all_preds, all_targets = [], []
@@ -116,17 +151,35 @@ def evaluate(
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate baseline PatchTST on ETTh1 test set")
-    parser.add_argument("--checkpoint", default=config.CHECKPOINT_PATH)
-    parser.add_argument("--out",        default="results/baseline_model_metrics.csv")
-    parser.add_argument("--batch-size", type=int,   default=config.BATCH_SIZE)
-    parser.add_argument("--num-workers", type=int,  default=config.NUM_WORKERS)
+    parser.add_argument("--attention", choices=["standard", "fused"], default="standard")
+    parser.add_argument("--checkpoint", default=None)
+    parser.add_argument("--checkpoint-format", choices=["auto", "standard", "fused"], default="auto")
+    parser.add_argument("--out", default=None)
+    parser.add_argument("--batch-size", type=int, default=config.BATCH_SIZE)
+    parser.add_argument("--num-workers", type=int, default=config.NUM_WORKERS)
+    parser.add_argument("--no-cuda", action="store_true")
     args = parser.parse_args()
 
+    attention = normalize_attention_name(args.attention)
+    checkpoint_path = (
+        args.checkpoint
+        or (config.FUSED_CHECKPOINT_PATH if attention == "fused" else config.BASELINE_CHECKPOINT_PATH)
+    )
+    out_path = (
+        args.out
+        or (config.FUSED_METRICS_PATH if attention == "fused" else config.BASELINE_METRICS_PATH)
+    )
+    method_name = "fused_kernel" if attention == "fused" else "baseline_unfused"
+
     evaluate(
-        checkpoint_path=args.checkpoint,
-        out_path=args.out,
+        checkpoint_path=checkpoint_path,
+        out_path=out_path,
+        method_name=method_name,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        attention=attention,
+        checkpoint_format=args.checkpoint_format,
+        no_cuda=args.no_cuda,
     )
 
 
