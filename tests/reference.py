@@ -27,12 +27,8 @@ def split_qkv_weight(W_qkv: np.ndarray):
         raise ValueError(f"First dimension of W_qkv must be divisible by 3, got {W_qkv.shape}")
 
     d_model = W_qkv.shape[1]
-    if W_qkv.shape[0] != 3 * d_model:
-        raise ValueError(
-            f"W_qkv must have shape (3 * d_model, d_model), got {W_qkv.shape}"
-        )
-
-    return np.split(W_qkv, 3, axis=0)
+    qkv_out_dim = W_qkv.shape[0] // 3
+    return np.split(W_qkv, 3, axis=0), d_model, qkv_out_dim
 
 
 def softmax(x, axis=-1):
@@ -93,16 +89,23 @@ def fused_attention_reference(X, W_qkv, n_heads):
         raise ValueError(f"d_model={d_model} must be divisible by n_heads={n_heads}")
 
     d_head = d_model // n_heads
-    W_q, W_k, W_v = split_qkv_weight(W_qkv)
+    (W_q, W_k, W_v), in_dim, qkv_out_dim = split_qkv_weight(W_qkv)
+    if in_dim != d_model:
+        raise ValueError(f"W_qkv input dim {in_dim} must match X feature dim {d_model}")
+    if qkv_out_dim % n_heads != 0:
+        raise ValueError(
+            f"Stacked QKV output dim {qkv_out_dim} must be divisible by n_heads={n_heads}"
+        )
 
-    Q = (X @ W_q.T).reshape(batch, seq_len, n_heads, d_head).transpose(0, 2, 1, 3)
-    K = (X @ W_k.T).reshape(batch, seq_len, n_heads, d_head).transpose(0, 2, 1, 3)
-    V = (X @ W_v.T).reshape(batch, seq_len, n_heads, d_head).transpose(0, 2, 1, 3)
+    qkv_d_head = qkv_out_dim // n_heads
+    Q = (X @ W_q.T).reshape(batch, seq_len, n_heads, qkv_d_head).transpose(0, 2, 1, 3)
+    K = (X @ W_k.T).reshape(batch, seq_len, n_heads, qkv_d_head).transpose(0, 2, 1, 3)
+    V = (X @ W_v.T).reshape(batch, seq_len, n_heads, qkv_d_head).transpose(0, 2, 1, 3)
 
-    scores = (Q @ K.transpose(0, 1, 3, 2)) / np.sqrt(np.float32(d_head))
+    scores = (Q @ K.transpose(0, 1, 3, 2)) / np.sqrt(np.float32(qkv_d_head))
     attn_weights = softmax(scores, axis=-1).astype(np.float32, copy=False)
     out = attn_weights @ V
-    out = out.transpose(0, 2, 1, 3).reshape(batch, seq_len, d_model)
+    out = out.transpose(0, 2, 1, 3).reshape(batch, seq_len, qkv_out_dim)
     return out.astype(np.float32, copy=False)
 
 

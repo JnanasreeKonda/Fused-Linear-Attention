@@ -179,6 +179,13 @@ def main():
     )
     print(f"[m10] Device: {device}")
 
+    if device.type == "cpu" and args.num_workers > 0:
+        print(
+            "[m10] CPU mode detected; forcing num_workers=0 to avoid "
+            "shared-memory worker startup issues in restricted environments."
+        )
+        args.num_workers = 0
+
     train_loader, val_loader, test_loader, _, _ = get_dataloaders(
         batch_size=args.batch_size, num_workers=args.num_workers
     )

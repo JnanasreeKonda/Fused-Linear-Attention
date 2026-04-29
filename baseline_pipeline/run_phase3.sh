@@ -10,11 +10,19 @@
 set -e
 cd "$(dirname "$0")"
 
+if [[ -x "../.venv/bin/python" ]]; then
+  PYTHON_BIN="../.venv/bin/python"
+else
+  PYTHON_BIN="python3"
+fi
+
 NO_CUDA=""
 TRAIN_FUSED=""
+NUM_WORKERS=""
 for arg in "$@"; do
   if [[ "$arg" == "--no-cuda" ]]; then
     NO_CUDA="--no-cuda"
+    NUM_WORKERS="--num-workers 0"
   fi
   if [[ "$arg" == "--train-fused" ]]; then
     TRAIN_FUSED="--train-fused"
@@ -26,18 +34,18 @@ echo " FusedLinearAttention — Phase 3 (Rithwik)"
 echo "═══════════════════════════════════════════════════════════════"
 
 echo -e "\n[1/4] M10 — End-to-end validation and timing …"
-python3 model/end_to_end_validate.py ${NO_CUDA} ${TRAIN_FUSED}
+"$PYTHON_BIN" model/end_to_end_validate.py ${NO_CUDA} ${TRAIN_FUSED} ${NUM_WORKERS}
 
 echo -e "\n[2/4] Merge baseline/fused profiling tables …"
 if [[ -f results/baseline_profiling.csv && -f results/fused_profiling.csv ]]; then
-  python3 results/merge_comparison.py
+  "$PYTHON_BIN" results/merge_comparison.py
 else
   echo "  Skipping merge: profiling CSVs not both present."
 fi
 
 echo -e "\n[3/4] M11 — Generate Phase 3 figures …"
 if [[ -f results/comparison_table.csv ]]; then
-  python3 results/generate_figures.py
+  "$PYTHON_BIN" results/generate_figures.py
 else
   echo "  Skipping figures: results/comparison_table.csv not found."
 fi
