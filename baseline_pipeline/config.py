@@ -48,11 +48,28 @@ SEED           = 42
 NUM_WORKERS    = 4
 
 CHECKPOINT_DIR  = os.path.join(BASELINE_DIR, "results")
-CHECKPOINT_PATH = os.path.join(CHECKPOINT_DIR, "best_baseline_model.pt")
+RESULTS_DIR = CHECKPOINT_DIR
+FIGURES_DIR = os.path.join(RESULTS_DIR, "figures")
+TRACES_DIR = os.path.join(RESULTS_DIR, "traces")
+
+BASELINE_CHECKPOINT_PATH = os.path.join(CHECKPOINT_DIR, "best_baseline_model.pt")
+FUSED_CHECKPOINT_PATH = os.path.join(CHECKPOINT_DIR, "best_fused_model.pt")
+CHECKPOINT_PATH = BASELINE_CHECKPOINT_PATH
+
+BASELINE_TRAIN_LOG_PATH = os.path.join(RESULTS_DIR, "baseline_training_log.csv")
+FUSED_TRAIN_LOG_PATH = os.path.join(RESULTS_DIR, "fused_training_log.csv")
+FUSED_GRAD_LOG_PATH = os.path.join(RESULTS_DIR, "fused_gradient_norms.csv")
+
+BASELINE_METRICS_PATH = os.path.join(RESULTS_DIR, "baseline_model_metrics.csv")
+FUSED_METRICS_PATH = os.path.join(RESULTS_DIR, "fused_model_metrics.csv")
+VALIDATION_TABLE_PATH = os.path.join(RESULTS_DIR, "validation_table.csv")
+ENDTOEND_TIMING_PATH = os.path.join(RESULTS_DIR, "endtoend_timing.csv")
 
 # ── Profiling ─────────────────────────────────────────────────────────────────
 WARMUP_ITERS    = 100
 TIMED_ITERS     = 500
+FORWARD_WARMUP_ITERS = 25
+FORWARD_TIMED_ITERS = 100
 SEQ_LENGTHS     = [64, 128, 256, 512, 1024]
 D_HEAD          = 64
 N_HEADS_BENCH   = 8

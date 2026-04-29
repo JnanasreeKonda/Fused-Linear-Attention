@@ -12,23 +12,23 @@ import os
 
 import torch
 
-_kernel_cache = None
+_kernel_cache = {}
 
 
-def load_fused_kernel():
+def load_fused_kernel(head_dim: int = 64, tile_size: int = 64):
     """
     JIT-compile the CUDA extension and return the loaded module.
 
     Notes
     -----
-    The current kernel is compiled for the benchmark configuration
-    `TILE_SIZE=64, HEAD_DIM=64` on `sm_80` (A100). The integration wrapper in
-    `baseline_pipeline/model/fused_attn_block.py` guards against unsupported
-    head dimensions.
+    The kernel source is macro-parameterized by `HEAD_DIM` and `TILE_SIZE`, so
+    PatchTST can request a head dimension that differs from the benchmark
+    configuration.
     """
     global _kernel_cache
-    if _kernel_cache is not None:
-        return _kernel_cache
+    cache_key = (int(head_dim), int(tile_size))
+    if cache_key in _kernel_cache:
+        return _kernel_cache[cache_key]
 
     from torch.utils.cpp_extension import load
 
@@ -36,6 +36,7 @@ def load_fused_kernel():
     cu_file = os.path.join(root, "kernel", "fused_attn.cu")
     cpp_file = os.path.join(root, "kernel", "fused_attn_ext.cpp")
     build_dir = os.path.join(root, "build")
+    module_name = f"fused_linear_attention_hd{head_dim}_tile{tile_size}"
 
     for path in (cu_file, cpp_file):
         if not os.path.exists(path):
@@ -46,17 +47,17 @@ def load_fused_kernel():
 
     os.makedirs(build_dir, exist_ok=True)
 
-    _kernel_cache = load(
-        name="fused_linear_attention",
+    _kernel_cache[cache_key] = load(
+        name=module_name,
         sources=[cpp_file, cu_file],
         extra_cuda_cflags=[
             "-O3",
             "-arch=sm_80",
             "--use_fast_math",
-            "-DTILE_SIZE=64",
-            "-DHEAD_DIM=64",
+            f"-DTILE_SIZE={int(tile_size)}",
+            f"-DHEAD_DIM={int(head_dim)}",
         ],
         verbose=False,
         build_directory=build_dir,
     )
-    return _kernel_cache
+    return _kernel_cache[cache_key]
