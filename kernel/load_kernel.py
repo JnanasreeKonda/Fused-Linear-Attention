@@ -46,16 +46,24 @@ def load_fused_kernel():
 
     os.makedirs(build_dir, exist_ok=True)
 
+    extra_cuda_cflags = [
+        "-O3",
+        "-arch=sm_80",
+        "--use_fast_math",
+        "-DTILE_SIZE=64",
+        "-DHEAD_DIM=64",
+    ]
+
+    # Older cluster toolkits (for example CUDA 11.1) reject newer host GCC
+    # versions by default. Allowing unsupported compilers keeps the build path
+    # usable on shared GPU systems where the toolkit cannot be upgraded.
+    if os.environ.get("FLA_ALLOW_UNSUPPORTED_COMPILER", "1") == "1":
+        extra_cuda_cflags.append("-allow-unsupported-compiler")
+
     _kernel_cache = load(
         name="fused_linear_attention",
         sources=[cpp_file, cu_file],
-        extra_cuda_cflags=[
-            "-O3",
-            "-arch=sm_80",
-            "--use_fast_math",
-            "-DTILE_SIZE=64",
-            "-DHEAD_DIM=64",
-        ],
+        extra_cuda_cflags=extra_cuda_cflags,
         verbose=False,
         build_directory=build_dir,
     )
