@@ -25,6 +25,7 @@ import csv
 import os
 import sys
 import time
+from typing import Dict, List
 
 import torch
 
@@ -142,7 +143,7 @@ def benchmark_forward(
     }
 
 
-def write_csv(path: str, rows: list[dict]) -> None:
+def write_csv(path: str, rows: List[Dict]) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
@@ -167,6 +168,7 @@ def main():
     parser.add_argument("--timing-out", default=config.ENDTOEND_TIMING_PATH)
     parser.add_argument("--epochs", type=int, default=config.EPOCHS)
     parser.add_argument("--lr", type=float, default=config.LR)
+    parser.add_argument("--dropout", type=float, default=config.DROPOUT)
     parser.add_argument("--patience", type=int, default=config.PATIENCE)
     parser.add_argument("--batch-size", type=int, default=config.BATCH_SIZE)
     parser.add_argument("--num-workers", type=int, default=config.NUM_WORKERS)
@@ -179,14 +181,30 @@ def main():
     )
     print(f"[m10] Device: {device}")
 
+    if device.type == "cpu" and args.num_workers > 0:
+        print(
+            "[m10] CPU mode detected; forcing num_workers=0 to avoid "
+            "shared-memory worker startup issues in restricted environments."
+        )
+        args.num_workers = 0
+
     train_loader, val_loader, test_loader, _, _ = get_dataloaders(
         batch_size=args.batch_size, num_workers=args.num_workers
     )
 
     if args.train_fused:
         set_seed()
+        fused_dropout = args.dropout
+        if device.type == "cuda" and fused_dropout > 0:
+            print(
+                "[m10] Fused CUDA attention does not implement attention-weight "
+                "dropout in the custom kernel yet; forcing dropout=0.0 for "
+                "fused retraining."
+            )
+            fused_dropout = 0.0
         fused_model = PatchTST(
-            attn_block_class=resolve_attention_block("fused")
+            attn_block_class=resolve_attention_block("fused"),
+            dropout=fused_dropout,
         ).to(device)
         print("[m10] Training fused-attention PatchTST from scratch...")
         train(

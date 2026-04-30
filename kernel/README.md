@@ -20,9 +20,11 @@ cleaned repository layout.
 - a root-level fused-kernel code path
 - PyTorch extension loading for the canonical kernel location
 - benchmark-oriented `HEAD_DIM=64` configuration
+- integration support for model-side eval / inference through the canonical wrapper
 
 ## Current Limitation
 
 The current fused path is still specialized around the benchmark kernel
-configuration and is not yet fully generalized for the PatchTST model-side
+configuration. The model-side wrapper now falls back to PyTorch attention for
+training, CPU execution, and unsupported head sizes such as PatchTST's
 `d_head=32` configuration.

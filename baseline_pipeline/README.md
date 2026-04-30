@@ -22,6 +22,10 @@ Core ETTh1 and PatchTST workflow.
   - baseline evaluation script
 - `fused_attn_block.py`
   - model-side wrapper for the fused kernel
+- `end_to_end_validate.py`
+  - Phase 3 validation and timing driver
+- `attention_utils.py`
+  - checkpoint conversion and attention-class helpers
 
 ### `profiling/`
 Benchmark scripts.
@@ -52,8 +56,8 @@ Implemented here:
 Partially implemented or still pending:
 
 - full GPU-backed fused-kernel validation from this pipeline
-- fused-kernel backward support for true end-to-end training without the
-  PyTorch-reference fallback
+- optional future work: replace the current custom autograd backward bridge
+  with a handwritten fused CUDA backward kernel
 
 ## Usage
 
@@ -67,11 +71,25 @@ python model/train.py
 python model/evaluate.py
 ```
 
-### Fused benchmark scaffold
+### Fused profiling workflow
 
 ```bash
 cd baseline_pipeline
-python profiling/fused_bench.py --simulate
+./run_bhanuja.sh --simulate
+```
+
+On a compatible CUDA build environment:
+
+```bash
+cd baseline_pipeline
+./run_bhanuja.sh
+```
+
+### Phase 2 / 3 validation helper
+
+```bash
+cd baseline_pipeline
+./run_phase23.sh
 ```
 
 ### Phase 3 workflow (M10 + M11)
@@ -87,6 +105,13 @@ On a CUDA node with a working driver/toolchain, replace `--no-cuda` with
 `--train-fused` to retrain the fused attention path and emit the Phase 3
 timing/validation artifacts.
 
+The fused CUDA training path now uses:
+
+- the compiled CUDA kernel for attention forward
+- a custom autograd backward bridge for gradients
+- `dropout=0.0` automatically for fused training, because the custom kernel
+  does not implement attention-weight dropout
+
 ## Team Work Reflected In This Folder
 
 - Rithwik Amajala
@@ -95,3 +120,12 @@ timing/validation artifacts.
   - fused benchmark/results scaffolding used for profiling comparisons
 - Jnanasree Konda
   - kernel interface assumptions that the fused wrapper and correctness flow rely on
+
+## Notes
+
+- `run_bhanuja.sh` is the recommended entrypoint for the fused benchmarking
+  workflow.
+- `baseline_pipeline/results/` is the canonical home for benchmark CSVs,
+  comparison tables, generated figures, and preserved deliverables.
+- Treat fused results as final performance evidence only when
+  `fused_profiling.csv` shows `run_mode=cuda_kernel`.

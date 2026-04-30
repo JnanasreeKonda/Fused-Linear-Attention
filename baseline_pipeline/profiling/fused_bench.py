@@ -13,6 +13,7 @@ import csv
 import os
 import sys
 import time
+from typing import Dict, List
 
 import torch
 import torch.nn as nn
@@ -96,6 +97,7 @@ def benchmark_one(
     device: torch.device,
     warmup: int,
     timed: int,
+    run_mode: str,
 ) -> dict:
     x = torch.randn(batch_size, seq_len, embed_dim, device=device, dtype=torch.float32)
 
@@ -141,6 +143,7 @@ def benchmark_one(
 
     return {
         "method": "fused_kernel",
+        "run_mode": run_mode,
         "seq_len": seq_len,
         "embed_dim": embed_dim,
         "n_heads": n_heads,
@@ -164,7 +167,7 @@ def benchmark_one(
     }
 
 
-def build_occupancy_sweep() -> list[dict]:
+def build_occupancy_sweep() -> List[Dict]:
     tile_sizes = [16, 32, 64, 128]
     seq_lens = config.SEQ_LENGTHS
     d_head = config.D_HEAD
@@ -209,6 +212,7 @@ def main():
 
     if args.simulate:
         model = FusedQKVAttentionSimulated(embed_dim, n_heads).to(device).eval()
+        run_mode = "simulation"
         print("[fused_bench] Mode: PyTorch simulation")
     else:
         if device.type != "cuda":
@@ -217,6 +221,7 @@ def main():
         dummy = torch.randn(1, 64, embed_dim, device=device)
         with torch.no_grad():
             _ = model(dummy)
+        run_mode = "cuda_kernel"
         print("[fused_bench] Mode: compiled CUDA kernel")
 
     print(f"[fused_bench] Device    : {device}")
@@ -231,7 +236,16 @@ def main():
     results = []
     for seq_len in seq_lens:
         print(f"  seq_len={seq_len:>5} ... ", end="", flush=True)
-        row = benchmark_one(model, seq_len, embed_dim, batch_size, device, args.warmup, args.timed)
+        row = benchmark_one(
+            model,
+            seq_len,
+            embed_dim,
+            batch_size,
+            device,
+            args.warmup,
+            args.timed,
+            run_mode,
+        )
         results.append(row)
         print(
             f"per_iter={row['per_iter_us']:8.1f} us  |  "

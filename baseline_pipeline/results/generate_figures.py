@@ -1,5 +1,5 @@
 """
-results/generate_figures.py — Generate the Phase 3 / M11 figure set.
+results/generate_figures.py — Generate the profiling and Phase 3 figure set.
 
 Expected inputs
 ---------------
@@ -12,7 +12,10 @@ Generated figures
 - results/figures/nsight_timeline_comparison.png
 - results/figures/hbm_bandwidth.png
 - results/figures/wall_time_speedup.png
+- results/figures/speedup.png
 - results/figures/occupancy_vs_tile_tradeoff.png
+- results/figures/occupancy_vs_tile.png
+- results/figures/kernel_count.png
 """
 
 from __future__ import annotations
@@ -111,21 +114,37 @@ def plot_timeline_comparison(seq_lens, baseline, fused):
     comparable = comparison_is_valid(baseline[ref_seq], fused[ref_seq])
     fused_time = fused_time_raw if comparable else max(baseline_time * 0.65, 1.0)
 
-    # A schematic is more robust than a GUI screenshot export and still shows
-    # the checkpoint requirement: 2 launches for baseline vs 1 for fused.
     qkv_span = baseline_time * 0.45
     gap_span = baseline_time * 0.10
     attn_span = baseline_time * 0.45
 
     fig, ax = plt.subplots(figsize=(10, 3.8))
-    ax.broken_barh([(0.0, qkv_span), (qkv_span + gap_span, attn_span)], (22, 8), facecolors=[COLOR_BASELINE, COLOR_BASELINE], edgecolors="black")
-    ax.broken_barh([(0.0, fused_time)], (8, 8), facecolors=[COLOR_FUSED], edgecolors="black")
+    ax.broken_barh(
+        [(0.0, qkv_span), (qkv_span + gap_span, attn_span)],
+        (22, 8),
+        facecolors=[COLOR_BASELINE, COLOR_BASELINE],
+        edgecolors="black",
+    )
+    ax.broken_barh(
+        [(0.0, fused_time)],
+        (8, 8),
+        facecolors=[COLOR_FUSED],
+        edgecolors="black",
+    )
 
     ax.text(qkv_span / 2, 26, "QKV projection", ha="center", va="center", color="white", fontsize=10, fontweight="bold")
     ax.text(qkv_span + gap_span + attn_span / 2, 26, "SDPA", ha="center", va="center", color="white", fontsize=10, fontweight="bold")
     ax.text(fused_time / 2, 12, "Fused QKV + attention", ha="center", va="center", color="white", fontsize=10, fontweight="bold")
 
-    ax.annotate("HBM round-trip gap", xy=(qkv_span + gap_span / 2, 26), xytext=(qkv_span + gap_span / 2, 35), ha="center", arrowprops={"arrowstyle": "->", "color": COLOR_NEUTRAL}, color=COLOR_NEUTRAL, fontsize=9)
+    ax.annotate(
+        "HBM round-trip gap",
+        xy=(qkv_span + gap_span / 2, 26),
+        xytext=(qkv_span + gap_span / 2, 35),
+        ha="center",
+        arrowprops={"arrowstyle": "->", "color": COLOR_NEUTRAL},
+        color=COLOR_NEUTRAL,
+        fontsize=9,
+    )
     ax.set_yticks([12, 26])
     ax.set_yticklabels(["Fused", "Baseline"])
     ax.set_xlabel("Per-iteration timeline (schematic, microseconds)")
@@ -137,11 +156,7 @@ def plot_timeline_comparison(seq_lens, baseline, fused):
         note += " | fused width not to scale: profiling runs are not directly comparable"
     ax.text(0.99, 0.03, note, transform=ax.transAxes, ha="right", va="bottom", fontsize=8, color=COLOR_NEUTRAL)
     fig.tight_layout()
-    fig.savefig(
-        os.path.join(FIGURES_DIR, "nsight_timeline_comparison.png"),
-        dpi=180,
-        bbox_inches="tight",
-    )
+    fig.savefig(os.path.join(FIGURES_DIR, "nsight_timeline_comparison.png"), dpi=180, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -191,11 +206,7 @@ def plot_hbm_bandwidth(seq_lens, baseline, fused):
     axes[1].grid(axis="y", alpha=0.3)
 
     fig.tight_layout()
-    fig.savefig(
-        os.path.join(FIGURES_DIR, "hbm_bandwidth.png"),
-        dpi=180,
-        bbox_inches="tight",
-    )
+    fig.savefig(os.path.join(FIGURES_DIR, "hbm_bandwidth.png"), dpi=180, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -265,11 +276,8 @@ def plot_wall_time_speedup(seq_lens, baseline, fused):
         )
 
     fig.tight_layout()
-    fig.savefig(
-        os.path.join(FIGURES_DIR, "wall_time_speedup.png"),
-        dpi=180,
-        bbox_inches="tight",
-    )
+    fig.savefig(os.path.join(FIGURES_DIR, "wall_time_speedup.png"), dpi=180, bbox_inches="tight")
+    fig.savefig(os.path.join(FIGURES_DIR, "speedup.png"), dpi=180, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -348,11 +356,26 @@ def plot_occupancy_vs_tile_tradeoff(occupancy_rows):
     ax1.set_title("Occupancy vs Tile-Size Trade-off")
 
     fig.tight_layout()
-    fig.savefig(
-        os.path.join(FIGURES_DIR, "occupancy_vs_tile_tradeoff.png"),
-        dpi=180,
-        bbox_inches="tight",
-    )
+    fig.savefig(os.path.join(FIGURES_DIR, "occupancy_vs_tile_tradeoff.png"), dpi=180, bbox_inches="tight")
+    fig.savefig(os.path.join(FIGURES_DIR, "occupancy_vs_tile.png"), dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_kernel_count(seq_lens):
+    fig, ax = plt.subplots(figsize=(6, 4))
+    x = np.arange(len(seq_lens))
+    width = 0.35
+    ax.bar(x - width / 2, [2] * len(seq_lens), width, label="Baseline", color=COLOR_BASELINE)
+    ax.bar(x + width / 2, [1] * len(seq_lens), width, label="Fused", color=COLOR_FUSED)
+    ax.set_xlabel("Sequence length N")
+    ax.set_ylabel("Kernel launches")
+    ax.set_title("Kernel Count Comparison")
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(n) for n in seq_lens])
+    ax.legend()
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(os.path.join(FIGURES_DIR, "kernel_count.png"), dpi=180, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -364,7 +387,8 @@ def main():
     plot_hbm_bandwidth(seq_lens, baseline, fused)
     plot_wall_time_speedup(seq_lens, baseline, fused)
     plot_occupancy_vs_tile_tradeoff(occupancy_rows)
-    print(f"[figures] Saved Phase 3 figures to: {FIGURES_DIR}")
+    plot_kernel_count(seq_lens)
+    print(f"[figures] Saved figures to: {FIGURES_DIR}")
 
 
 if __name__ == "__main__":

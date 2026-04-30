@@ -13,9 +13,10 @@ from __future__ import annotations
 import csv
 import os
 import sys
+from typing import Dict, Tuple
 
 
-def load_csv_keyed(path: str, key: str = "seq_len") -> dict:
+def load_csv_keyed(path: str, key: str = "seq_len") -> Dict:
     rows = {}
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
@@ -77,7 +78,7 @@ def estimate_hbm_bytes(method: str, seq_len: int, embed_dim: int, n_heads: int, 
     return read_bytes, write_bytes
 
 
-def comparison_status(baseline_row: dict, fused_row: dict) -> tuple[str, str]:
+def comparison_status(baseline_row: dict, fused_row: dict) -> Tuple[str, str]:
     b_exec = infer_execution_mode(baseline_row, "baseline_unfused")
     f_exec = infer_execution_mode(fused_row, "fused_kernel")
     b_backend = infer_kernel_backend(baseline_row, "baseline_unfused")
@@ -131,14 +132,21 @@ def main():
         f_heads = int(f.get("n_heads", 8))
         f_batch = int(f.get("batch_size", 1))
 
-        b_read = safe_float(b, "HBM_read_bytes_est")
-        b_write = safe_float(b, "HBM_write_bytes_est")
-        f_read = safe_float(f, "HBM_read_bytes_est")
-        f_write = safe_float(f, "HBM_write_bytes_est")
-        if b_read is None or b_write is None:
-            b_read, b_write = estimate_hbm_bytes("baseline_unfused", seq_len, b_embed, b_heads, b_batch)
-        if f_read is None or f_write is None:
-            f_read, f_write = estimate_hbm_bytes("fused_kernel", seq_len, f_embed, f_heads, f_batch)
+        b_read, b_write = estimate_hbm_bytes("baseline_unfused", seq_len, b_embed, b_heads, b_batch)
+        f_read, f_write = estimate_hbm_bytes("fused_kernel", seq_len, f_embed, f_heads, f_batch)
+
+        row_b_read = safe_float(b, "HBM_read_bytes_est")
+        row_b_write = safe_float(b, "HBM_write_bytes_est")
+        row_f_read = safe_float(f, "HBM_read_bytes_est")
+        row_f_write = safe_float(f, "HBM_write_bytes_est")
+        if row_b_read is not None:
+            b_read = row_b_read
+        if row_b_write is not None:
+            b_write = row_b_write
+        if row_f_read is not None:
+            f_read = row_f_read
+        if row_f_write is not None:
+            f_write = row_f_write
 
         b_time = safe_float(b, "per_iter_us")
         f_time = safe_float(f, "per_iter_us")
@@ -160,6 +168,7 @@ def main():
             output_rows.append(
                 {
                     "method": method,
+                    "run_mode": row.get("run_mode", "baseline" if not is_fused else "unknown"),
                     "seq_len": seq_len,
                     "embed_dim": row.get("embed_dim", 512),
                     "n_heads": row.get("n_heads", 8),
@@ -189,6 +198,17 @@ def main():
         writer.writerows(output_rows)
 
     print(f"Saved: {out_path}")
+    print()
+    print("Summary:")
+    for row in output_rows:
+        if row["method"] != "fused_kernel":
+            continue
+        print(
+            f"  seq_len={row['seq_len']:>4}  "
+            f"mode={row['run_mode']:<11}  "
+            f"speedup={row['speedup_vs_baseline'] or 'N/A':>6}  "
+            f"hbm_reduction={row['HBM_read_reduction_pct'] or 'N/A'}%"
+        )
 
 
 if __name__ == "__main__":

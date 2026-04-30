@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import os
 
-import torch
-
 _kernel_cache = {}
 
 
@@ -47,16 +45,22 @@ def load_fused_kernel(head_dim: int = 64, tile_size: int = 64):
 
     os.makedirs(build_dir, exist_ok=True)
 
+    extra_cuda_cflags = [
+        "-O3",
+        "-arch=sm_80",
+        "--use_fast_math",
+        f"-DTILE_SIZE={int(tile_size)}",
+        f"-DHEAD_DIM={int(head_dim)}",
+    ]
+
+    # Older cluster toolkits can reject newer host GCC versions by default.
+    if os.environ.get("FLA_ALLOW_UNSUPPORTED_COMPILER", "1") == "1":
+        extra_cuda_cflags.append("-allow-unsupported-compiler")
+
     _kernel_cache[cache_key] = load(
         name=module_name,
         sources=[cpp_file, cu_file],
-        extra_cuda_cflags=[
-            "-O3",
-            "-arch=sm_80",
-            "--use_fast_math",
-            f"-DTILE_SIZE={int(tile_size)}",
-            f"-DHEAD_DIM={int(head_dim)}",
-        ],
+        extra_cuda_cflags=extra_cuda_cflags,
         verbose=False,
         build_directory=build_dir,
     )
