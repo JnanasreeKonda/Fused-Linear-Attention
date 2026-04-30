@@ -57,7 +57,9 @@ Still partial or pending:
 
 - real GPU validation of the fused kernel in this cleaned layout
 - full end-to-end fused PatchTST training run
-- support for model-side `d_head=32` in the current fused integration path
+- a fused-kernel backward path; current training uses the PyTorch reference
+  attention path for gradients and switches to the fused kernel for inference-only
+  execution when the compiled CUDA extension is available
 
 ## Team Contributions
 

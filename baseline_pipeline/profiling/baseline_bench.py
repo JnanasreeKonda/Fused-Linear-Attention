@@ -29,7 +29,8 @@ method, seq_len, embed_dim, n_heads, batch_size,
 warmup_iters, timed_iters,
 total_elapsed_ms, per_iter_us,
 peak_alloc_mb,
-device, gpu_name
+kernel_count, HBM_read_bytes_est, HBM_write_bytes_est,
+device, gpu_name, execution_mode, kernel_backend
 """
 
 import argparse
@@ -152,6 +153,14 @@ def benchmark_one(
         nvtx.pop_range()
     per_iter_us  = (elapsed_ms / timed) * 1e3
 
+    fp32_bytes = 4
+    hbm_read = (
+        batch_size * seq_len * embed_dim
+        + 3 * embed_dim * config.N_HEADS_BENCH * model.d_head
+        + 3 * batch_size * config.N_HEADS_BENCH * seq_len * model.d_head
+    ) * fp32_bytes
+    hbm_write = (4 * batch_size * config.N_HEADS_BENCH * seq_len * model.d_head) * fp32_bytes
+
     return {
         "method":          "baseline_unfused",
         "seq_len":         seq_len,
@@ -163,8 +172,13 @@ def benchmark_one(
         "total_elapsed_ms": round(elapsed_ms,  4),
         "per_iter_us":      round(per_iter_us, 4),
         "peak_alloc_mb":    round(peak_mb,     4),
+        "kernel_count":    2,
+        "HBM_read_bytes_est": hbm_read,
+        "HBM_write_bytes_est": hbm_write,
         "device":          str(device),
         "gpu_name":        torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
+        "execution_mode":  "cuda_measured" if device.type == "cuda" else "cpu_fallback",
+        "kernel_backend":  "pytorch_unfused",
     }
 
 
