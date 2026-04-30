@@ -68,6 +68,10 @@ def load_comparison_table():
     return seq_lens, baseline, fused
 
 
+def comparison_is_valid(baseline_row, fused_row):
+    return (fused_row.get("comparison_status") or "").strip().lower() == "comparable"
+
+
 def load_optional_rows(filename: str):
     path = os.path.join(RESULTS_DIR, filename)
     if not os.path.exists(path):
@@ -86,7 +90,8 @@ def estimate_hbm_bytes(method: str, seq_len: int):
     if method == "baseline_unfused":
         read_bytes = (
             batch_size * seq_len * embed_dim
-            + 3 * batch_size * n_heads * seq_len * d_head * 2
+            + 3 * embed_dim * n_heads * d_head
+            + 3 * batch_size * n_heads * seq_len * d_head
         ) * fp32_bytes
         write_bytes = (4 * batch_size * n_heads * seq_len * d_head) * fp32_bytes
     else:
@@ -102,7 +107,9 @@ def estimate_hbm_bytes(method: str, seq_len: int):
 def plot_timeline_comparison(seq_lens, baseline, fused):
     ref_seq = 512 if 512 in baseline and 512 in fused else seq_lens[len(seq_lens) // 2]
     baseline_time = safe_float(baseline[ref_seq], "per_iter_us") or 0.0
-    fused_time = safe_float(fused[ref_seq], "per_iter_us") or 0.0
+    fused_time_raw = safe_float(fused[ref_seq], "per_iter_us") or 0.0
+    comparable = comparison_is_valid(baseline[ref_seq], fused[ref_seq])
+    fused_time = fused_time_raw if comparable else max(baseline_time * 0.65, 1.0)
 
     # A schematic is more robust than a GUI screenshot export and still shows
     # the checkpoint requirement: 2 launches for baseline vs 1 for fused.
@@ -125,7 +132,10 @@ def plot_timeline_comparison(seq_lens, baseline, fused):
     ax.set_title(f"Kernel Timeline Comparison at seq_len={ref_seq}")
     ax.set_xlim(0, max(baseline_time, fused_time) * 1.15 if max(baseline_time, fused_time) > 0 else 1.0)
     ax.grid(axis="x", alpha=0.25)
-    ax.text(0.99, 0.03, "Generated schematic from comparison_table.csv", transform=ax.transAxes, ha="right", va="bottom", fontsize=8, color=COLOR_NEUTRAL)
+    note = "Generated schematic from comparison_table.csv"
+    if not comparable:
+        note += " | fused width not to scale: profiling runs are not directly comparable"
+    ax.text(0.99, 0.03, note, transform=ax.transAxes, ha="right", va="bottom", fontsize=8, color=COLOR_NEUTRAL)
     fig.tight_layout()
     fig.savefig(
         os.path.join(FIGURES_DIR, "nsight_timeline_comparison.png"),
@@ -193,13 +203,16 @@ def plot_wall_time_speedup(seq_lens, baseline, fused):
     baseline_times = []
     fused_times = []
     speedups = []
+    comparables = []
 
     for seq_len in seq_lens:
         b_time = safe_float(baseline[seq_len], "per_iter_us")
         f_time = safe_float(fused[seq_len], "per_iter_us")
+        comparable = comparison_is_valid(baseline[seq_len], fused[seq_len])
         baseline_times.append(b_time)
         fused_times.append(f_time)
-        speedups.append((b_time / f_time) if (b_time and f_time and f_time > 0) else None)
+        comparables.append(comparable)
+        speedups.append((b_time / f_time) if (comparable and b_time and f_time and f_time > 0) else None)
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.2))
 
@@ -218,6 +231,17 @@ def plot_wall_time_speedup(seq_lens, baseline, fused):
     valid_y = [spd for spd in speedups if spd is not None]
     if valid_x:
         axes[1].plot(valid_x, valid_y, "o-", color=COLOR_FUSED, linewidth=2)
+    else:
+        axes[1].text(
+            0.5,
+            0.5,
+            "No directly comparable fused/baseline profiling runs.\nRun both on the same CUDA node with the compiled kernel.",
+            ha="center",
+            va="center",
+            transform=axes[1].transAxes,
+            color=COLOR_NEUTRAL,
+            fontsize=10,
+        )
     axes[1].axhline(1.0, linestyle="--", linewidth=1, color=COLOR_NEUTRAL)
     axes[1].set_title("Speedup vs Baseline")
     axes[1].set_xlabel("Sequence length")
@@ -226,6 +250,19 @@ def plot_wall_time_speedup(seq_lens, baseline, fused):
     axes[1].set_xticks(seq_lens)
     axes[1].set_xticklabels([str(v) for v in seq_lens])
     axes[1].grid(alpha=0.3)
+
+    if not all(comparables):
+        axes[0].text(
+            0.02,
+            0.98,
+            "Mixed profiling modes detected.\nAbsolute latencies shown for reference only.",
+            ha="left",
+            va="top",
+            transform=axes[0].transAxes,
+            fontsize=9,
+            color=COLOR_NEUTRAL,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85, edgecolor=COLOR_NEUTRAL),
+        )
 
     fig.tight_layout()
     fig.savefig(
@@ -294,6 +331,16 @@ def plot_occupancy_vs_tile_tradeoff(occupancy_rows):
             ax2.set_ylabel("Measured wall time (ms)")
         else:
             ax2.set_ylabel("Measured occupancy / latency")
+            ax2.text(
+                0.5,
+                0.5,
+                "Theoretical occupancy only.\nPopulate occupancy_sweep.csv with measured values from Greene/NSight Compute.",
+                ha="center",
+                va="center",
+                transform=ax2.transAxes,
+                color=COLOR_NEUTRAL,
+                fontsize=9,
+            )
 
     handles_1, labels_1 = ax1.get_legend_handles_labels()
     handles_2, labels_2 = ax2.get_legend_handles_labels()

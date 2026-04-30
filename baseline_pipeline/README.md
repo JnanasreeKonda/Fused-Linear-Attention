@@ -47,12 +47,13 @@ Implemented here:
 - PatchTST baseline model
 - baseline profiling script
 - fused profiling scaffold in the canonical layout
-- model-side fused wrapper scaffold
+- model-side fused wrapper plus Phase 3 validation flow
 
 Partially implemented or still pending:
 
 - full GPU-backed fused-kernel validation from this pipeline
-- end-to-end fused PatchTST training with the cleaned layout
+- fused-kernel backward support for true end-to-end training without the
+  PyTorch-reference fallback
 
 ## Usage
 
