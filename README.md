@@ -64,15 +64,14 @@ traffic by combining these stages into a single implementation.
 | Fused profiling pipeline | Complete | Fused benchmark, CSV merge, occupancy sweep, and figure generation are implemented. |
 | Phase 3 validation pipeline | Complete | End-to-end validation, checkpoint conversion, timing, and comparison-table generation are implemented. |
 | Real compiled-kernel GPU validation | Partial | Environment-dependent; simulation fallback works, but compiled-kernel runs require a compatible CUDA toolchain. |
-| End-to-end fused PatchTST validation | Partial | The fused wrapper supports reference fallback and CUDA inference, but fully validated fused retraining still depends on a working compiled-kernel environment. |
+| End-to-end fused PatchTST validation | Partial | The fused wrapper now supports CUDA forward plus a custom backward bridge, but final retraining/benchmarking still depends on a working compiled-kernel environment. |
 
 ## Remaining Work
 
 - real GPU validation of the fused kernel in this cleaned layout
-- full end-to-end fused PatchTST training run
-- a fused-kernel backward path; current training uses the PyTorch reference
-  attention path for gradients and switches to the fused kernel for inference-only
-  execution when the compiled CUDA extension is available
+- full end-to-end fused PatchTST training run and final metric collection
+- optional future work: replace the current custom autograd backward bridge
+  with a handwritten fused CUDA backward kernel
 
 ## How To Run
 
@@ -92,6 +91,7 @@ Quick simulation:
 
 ```bash
 python tests/test_correctness.py --simulate --quick --use-root-oracle
+python tests/test_fused_backward.py
 ```
 
 Quick CUDA-backed check:
@@ -145,6 +145,13 @@ cd baseline_pipeline
 ./run_phase3.sh --train-fused
 ```
 
+Direct fused training entrypoint:
+
+```bash
+cd baseline_pipeline
+python model/train.py --attention fused
+```
+
 ### Full repo helper
 
 ```bash
@@ -179,6 +186,10 @@ report.
   older toolkit / host compiler combinations.
 - Fully validated fused retraining still depends on a CUDA environment where
   the compiled kernel runs successfully end to end.
+- The current backward implementation is a custom autograd bridge that
+  recomputes the PyTorch reference attention graph during backpropagation. It
+  enables training on the fused forward path, but it is not yet a fully fused
+  handwritten CUDA backward kernel.
 
 ## Team Contributions
 

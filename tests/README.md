@@ -9,6 +9,8 @@ cleaned repository layout.
   - root-level NumPy oracle used by the consolidated repo
 - `test_correctness.py`
   - fused-kernel correctness suite
+- `test_fused_backward.py`
+  - smoke-test for the custom autograd backward bridge
 
 ## Purpose
 
@@ -22,6 +24,7 @@ Quick simulation:
 
 ```bash
 python3 tests/test_correctness.py --simulate --quick --use-root-oracle
+python3 tests/test_fused_backward.py
 ```
 
 Quick CUDA-backed check:
@@ -40,5 +43,8 @@ python3 tests/test_correctness.py
 
 - `test_correctness.py --simulate` validates the comparison logic without a
   compiled CUDA kernel.
+- `test_fused_backward.py` validates the custom backward bridge without
+  requiring CUDA by using a fake kernel forward that matches the reference
+  attention math.
 - GPU-backed fused-kernel validation still depends on a working CUDA toolchain
   and supported runtime environment.

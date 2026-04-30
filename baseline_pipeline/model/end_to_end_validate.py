@@ -167,6 +167,7 @@ def main():
     parser.add_argument("--timing-out", default=config.ENDTOEND_TIMING_PATH)
     parser.add_argument("--epochs", type=int, default=config.EPOCHS)
     parser.add_argument("--lr", type=float, default=config.LR)
+    parser.add_argument("--dropout", type=float, default=config.DROPOUT)
     parser.add_argument("--patience", type=int, default=config.PATIENCE)
     parser.add_argument("--batch-size", type=int, default=config.BATCH_SIZE)
     parser.add_argument("--num-workers", type=int, default=config.NUM_WORKERS)
@@ -192,8 +193,17 @@ def main():
 
     if args.train_fused:
         set_seed()
+        fused_dropout = args.dropout
+        if device.type == "cuda" and fused_dropout > 0:
+            print(
+                "[m10] Fused CUDA attention does not implement attention-weight "
+                "dropout in the custom kernel yet; forcing dropout=0.0 for "
+                "fused retraining."
+            )
+            fused_dropout = 0.0
         fused_model = PatchTST(
-            attn_block_class=resolve_attention_block("fused")
+            attn_block_class=resolve_attention_block("fused"),
+            dropout=fused_dropout,
         ).to(device)
         print("[m10] Training fused-attention PatchTST from scratch...")
         train(

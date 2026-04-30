@@ -232,6 +232,7 @@ def main():
     parser.add_argument("--attention", choices=["standard", "fused"], default="standard")
     parser.add_argument("--epochs", type=int, default=config.EPOCHS)
     parser.add_argument("--lr", type=float, default=config.LR)
+    parser.add_argument("--dropout", type=float, default=config.DROPOUT)
     parser.add_argument("--batch-size", type=int, default=config.BATCH_SIZE)
     parser.add_argument("--patience", type=int, default=config.PATIENCE)
     parser.add_argument("--num-workers", type=int, default=config.NUM_WORKERS)
@@ -256,7 +257,19 @@ def main():
     )
 
     attn_block_class = resolve_attention_block(attention_name)
-    model = PatchTST(attn_block_class=attn_block_class).to(device)
+    effective_dropout = args.dropout
+    if attention_name == "fused" and device.type == "cuda" and effective_dropout > 0:
+        print(
+            "[train] Fused CUDA attention does not implement attention-weight "
+            "dropout in the custom kernel yet; forcing dropout=0.0 for the "
+            "fused training run."
+        )
+        effective_dropout = 0.0
+
+    model = PatchTST(
+        attn_block_class=attn_block_class,
+        dropout=effective_dropout,
+    ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[train] Parameters : {n_params:,}")
 

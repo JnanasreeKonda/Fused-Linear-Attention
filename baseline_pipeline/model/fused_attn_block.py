@@ -3,12 +3,10 @@ model/fused_attn_block.py — Fused attention block wrapper.
 Owner: Rithwik Amajala (integration) + Jnanasree (kernel)  |  M10  |  Phase 3
 
 This module wraps the compiled CUDA kernel as a drop-in StandardAttentionBlock
-replacement.  Once Jnanasree hands off M8, Rithwik swaps this into PatchTST
-by passing:
-
-    model = PatchTST(attn_block_class=FusedLinearAttentionBlock)
-
-and retrains from scratch with the same seed / hyperparameters.
+replacement. The forward path uses Jnanasree's fused CUDA kernel; the backward
+path recomputes the reference attention graph under autograd so end-to-end
+training can stay on the fused forward path without requiring a second custom
+CUDA backward kernel.
 """
 
 from __future__ import annotations
@@ -23,6 +21,95 @@ import torch.nn.functional as F
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
+
+
+def _reference_attention_forward(
+    x: torch.Tensor,
+    q_w: torch.Tensor,
+    k_w: torch.Tensor,
+    v_w: torch.Tensor,
+    n_heads: int,
+    d_head: int,
+    dropout_p: float,
+    training: bool,
+) -> torch.Tensor:
+    B, S, D = x.shape
+    q = (x @ q_w).view(B, S, n_heads, d_head).transpose(1, 2)
+    k = (x @ k_w).view(B, S, n_heads, d_head).transpose(1, 2)
+    v = (x @ v_w).view(B, S, n_heads, d_head).transpose(1, 2)
+    out = F.scaled_dot_product_attention(
+        q,
+        k,
+        v,
+        dropout_p=(dropout_p if training else 0.0),
+    )
+    return out.transpose(1, 2).contiguous().view(B, S, D)
+
+
+class _FusedAttentionAutogradFn(torch.autograd.Function):
+    """
+    CUDA-forward / PyTorch-backward bridge for the fused attention block.
+
+    Forward:
+      - uses the compiled custom CUDA kernel
+    Backward:
+      - recomputes the unfused PyTorch attention graph and differentiates it
+        with autograd to obtain exact gradients for X/Wq/Wk/Wv
+
+    This keeps the assignment deliverable practical: the custom fused kernel is
+    used for the fast forward path, and training remains end-to-end usable on
+    CUDA without writing a second, much larger, handwritten CUDA backward.
+    """
+
+    @staticmethod
+    def forward(ctx, x, q_w, k_w, v_w, n_heads, d_head, kernel):
+        B, S, D = x.shape
+        out = kernel.forward(
+            x.contiguous(),
+            q_w.contiguous(),
+            k_w.contiguous(),
+            v_w.contiguous(),
+            B,
+            n_heads,
+            S,
+            D,
+            d_head,
+        )
+        ctx.save_for_backward(x, q_w, k_w, v_w)
+        ctx.n_heads = int(n_heads)
+        ctx.d_head = int(d_head)
+        return out.transpose(1, 2).contiguous().view(B, S, D)
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        x, q_w, k_w, v_w = ctx.saved_tensors
+        needs = ctx.needs_input_grad[:4]
+
+        with torch.enable_grad():
+            x_ref = x.detach().requires_grad_(needs[0])
+            q_w_ref = q_w.detach().requires_grad_(needs[1])
+            k_w_ref = k_w.detach().requires_grad_(needs[2])
+            v_w_ref = v_w.detach().requires_grad_(needs[3])
+
+            out_ref = _reference_attention_forward(
+                x_ref,
+                q_w_ref,
+                k_w_ref,
+                v_w_ref,
+                n_heads=ctx.n_heads,
+                d_head=ctx.d_head,
+                dropout_p=0.0,
+                training=False,
+            )
+
+            grads = torch.autograd.grad(
+                outputs=out_ref,
+                inputs=(x_ref, q_w_ref, k_w_ref, v_w_ref),
+                grad_outputs=grad_out,
+                allow_unused=True,
+            )
+
+        return grads[0], grads[1], grads[2], grads[3], None, None, None
 
 
 class FusedLinearAttentionBlock(nn.Module):
@@ -45,9 +132,6 @@ class FusedLinearAttentionBlock(nn.Module):
         self.dropout = dropout
         self._kernel = None
 
-        # Keep the same projection modules as StandardAttentionBlock so the
-        # fused wrapper can share the exact same initialization path, state-dict
-        # layout, and optimizer behavior when the reference fallback is used.
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
         self.v_proj = nn.Linear(d_model, d_model, bias=False)
@@ -55,7 +139,6 @@ class FusedLinearAttentionBlock(nn.Module):
         self._warned_reference_fallback = False
 
     def _load_kernel(self):
-        """JIT-compile and cache the CUDA extension (first call only)."""
         if self._kernel is None:
             try:
                 from kernel.load_kernel import load_fused_kernel
@@ -65,25 +148,31 @@ class FusedLinearAttentionBlock(nn.Module):
                 raise RuntimeError(
                     "FusedLinearAttentionBlock: kernel unavailable.\n"
                     "Falling back to the PyTorch reference path is supported,\n"
-                    "but compiled fused-kernel inference requires a working CUDA\n"
+                    "but compiled fused-kernel execution requires a working CUDA\n"
                     "toolchain plus Jnanasree's M8 handoff.\n"
                     f"Original error: {exc}"
                 )
 
     def _reference_attention(self, x: torch.Tensor) -> torch.Tensor:
-        B, S, D = x.shape
-        q = self.q_proj(x).view(B, S, self.n_heads, self.d_head).transpose(1, 2)
-        k = self.k_proj(x).view(B, S, self.n_heads, self.d_head).transpose(1, 2)
-        v = self.v_proj(x).view(B, S, self.n_heads, self.d_head).transpose(1, 2)
-        drop_p = self.dropout if self.training else 0.0
-        out = F.scaled_dot_product_attention(q, k, v, dropout_p=drop_p)
-        out = out.transpose(1, 2).contiguous().view(B, S, D)
+        q_w = self.q_proj.weight.t().contiguous()
+        k_w = self.k_proj.weight.t().contiguous()
+        v_w = self.v_proj.weight.t().contiguous()
+        out = _reference_attention_forward(
+            x,
+            q_w,
+            k_w,
+            v_w,
+            n_heads=self.n_heads,
+            d_head=self.d_head,
+            dropout_p=self.dropout,
+            training=self.training,
+        )
         return self.out_proj(out)
 
     def _should_use_reference_path(self, x: torch.Tensor) -> bool:
         if x.device.type != "cuda":
             return True
-        if torch.is_grad_enabled():
+        if x.dtype != torch.float32:
             return True
         if self.training and self.dropout > 0:
             return True
@@ -96,10 +185,10 @@ class FusedLinearAttentionBlock(nn.Module):
         reasons = []
         if x.device.type != "cuda":
             reasons.append("non-CUDA device")
-        if torch.is_grad_enabled():
-            reasons.append("autograd-enabled execution")
+        if x.dtype != torch.float32:
+            reasons.append(f"unsupported dtype={x.dtype}")
         if self.training and self.dropout > 0:
-            reasons.append("training-time dropout")
+            reasons.append("training-time attention dropout")
 
         msg = ", ".join(reasons) if reasons else "runtime constraint"
         print(
@@ -107,6 +196,21 @@ class FusedLinearAttentionBlock(nn.Module):
             f"({msg})."
         )
         self._warned_reference_fallback = True
+
+    def _fused_attention(self, x: torch.Tensor) -> torch.Tensor:
+        q_w = self.q_proj.weight.t().contiguous()
+        k_w = self.k_proj.weight.t().contiguous()
+        v_w = self.v_proj.weight.t().contiguous()
+        out = _FusedAttentionAutogradFn.apply(
+            x,
+            q_w,
+            k_w,
+            v_w,
+            self.n_heads,
+            self.d_head,
+            self._kernel,
+        )
+        return self.out_proj(out)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self._should_use_reference_path(x):
@@ -121,20 +225,4 @@ class FusedLinearAttentionBlock(nn.Module):
             self._warn_reference_fallback(x)
             return self._reference_attention(x)
 
-        B, S, D = x.shape
-        q_w = self.q_proj.weight.t().contiguous()
-        k_w = self.k_proj.weight.t().contiguous()
-        v_w = self.v_proj.weight.t().contiguous()
-        out = self._kernel.forward(
-            x.contiguous(),
-            q_w,
-            k_w,
-            v_w,
-            B,
-            self.n_heads,
-            S,
-            D,
-            self.d_head,
-        )
-        out = out.transpose(1, 2).contiguous().view(B, S, D)
-        return self.out_proj(out)
+        return self._fused_attention(x)

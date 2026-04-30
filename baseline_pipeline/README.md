@@ -56,8 +56,8 @@ Implemented here:
 Partially implemented or still pending:
 
 - full GPU-backed fused-kernel validation from this pipeline
-- fused-kernel backward support for true end-to-end training without the
-  PyTorch-reference fallback
+- optional future work: replace the current custom autograd backward bridge
+  with a handwritten fused CUDA backward kernel
 
 ## Usage
 
@@ -104,6 +104,13 @@ python results/generate_figures.py
 On a CUDA node with a working driver/toolchain, replace `--no-cuda` with
 `--train-fused` to retrain the fused attention path and emit the Phase 3
 timing/validation artifacts.
+
+The fused CUDA training path now uses:
+
+- the compiled CUDA kernel for attention forward
+- a custom autograd backward bridge for gradients
+- `dropout=0.0` automatically for fused training, because the custom kernel
+  does not implement attention-weight dropout
 
 ## Team Work Reflected In This Folder
 
