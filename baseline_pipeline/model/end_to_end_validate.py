@@ -25,6 +25,7 @@ import csv
 import os
 import sys
 import time
+from typing import Dict, List
 
 import torch
 
@@ -142,7 +143,7 @@ def benchmark_forward(
     }
 
 
-def write_csv(path: str, rows: list[dict]) -> None:
+def write_csv(path: str, rows: List[Dict]) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))

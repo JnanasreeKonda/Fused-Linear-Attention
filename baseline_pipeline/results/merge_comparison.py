@@ -13,9 +13,10 @@ from __future__ import annotations
 import csv
 import os
 import sys
+from typing import Dict, Tuple
 
 
-def load_csv_keyed(path: str, key: str = "seq_len") -> dict:
+def load_csv_keyed(path: str, key: str = "seq_len") -> Dict:
     rows = {}
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
@@ -77,7 +78,7 @@ def estimate_hbm_bytes(method: str, seq_len: int, embed_dim: int, n_heads: int, 
     return read_bytes, write_bytes
 
 
-def comparison_status(baseline_row: dict, fused_row: dict) -> tuple[str, str]:
+def comparison_status(baseline_row: dict, fused_row: dict) -> Tuple[str, str]:
     b_exec = infer_execution_mode(baseline_row, "baseline_unfused")
     f_exec = infer_execution_mode(fused_row, "fused_kernel")
     b_backend = infer_kernel_backend(baseline_row, "baseline_unfused")

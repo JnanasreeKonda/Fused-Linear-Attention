@@ -13,6 +13,7 @@ import csv
 import os
 import sys
 import time
+from typing import Dict, List
 
 import torch
 import torch.nn as nn
@@ -166,7 +167,7 @@ def benchmark_one(
     }
 
 
-def build_occupancy_sweep() -> list[dict]:
+def build_occupancy_sweep() -> List[Dict]:
     tile_sizes = [16, 32, 64, 128]
     seq_lens = config.SEQ_LENGTHS
     d_head = config.D_HEAD

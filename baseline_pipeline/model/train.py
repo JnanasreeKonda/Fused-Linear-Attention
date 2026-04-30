@@ -22,6 +22,7 @@ import os
 import random
 import time
 import sys
+from typing import Optional
 
 import numpy as np
 import torch
@@ -64,7 +65,7 @@ def train(
     patience: int = config.PATIENCE,
     checkpoint_path: str = config.CHECKPOINT_PATH,
     log_path: str = config.BASELINE_TRAIN_LOG_PATH,
-    gradient_log_path: str | None = None,
+    gradient_log_path: Optional[str] = None,
     attention_name: str = "standard",
 ) -> float:
     """
