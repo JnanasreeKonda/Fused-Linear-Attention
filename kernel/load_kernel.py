@@ -11,9 +11,11 @@ from __future__ import annotations
 import os
 
 _kernel_cache = {}
+DEFAULT_TILE_SIZE = int(os.environ.get("FLA_TILE_SIZE", "32"))
+DEFAULT_CUDA_ARCH = os.environ.get("TORCH_CUDA_ARCH_LIST", "8.0")
 
 
-def load_fused_kernel(head_dim: int = 64, tile_size: int = 64):
+def load_fused_kernel(head_dim: int = 64, tile_size: int = DEFAULT_TILE_SIZE):
     """
     JIT-compile the CUDA extension and return the loaded module.
 
@@ -44,6 +46,7 @@ def load_fused_kernel(head_dim: int = 64, tile_size: int = 64):
             )
 
     os.makedirs(build_dir, exist_ok=True)
+    os.environ.setdefault("TORCH_CUDA_ARCH_LIST", DEFAULT_CUDA_ARCH)
 
     extra_cuda_cflags = [
         "-O3",

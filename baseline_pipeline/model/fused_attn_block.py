@@ -22,6 +22,8 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+DEFAULT_TILE_SIZE = int(os.environ.get("FLA_TILE_SIZE", "32"))
+
 
 def _reference_attention_forward(
     x: torch.Tensor,
@@ -143,7 +145,10 @@ class FusedLinearAttentionBlock(nn.Module):
             try:
                 from kernel.load_kernel import load_fused_kernel
 
-                self._kernel = load_fused_kernel(head_dim=self.d_head)
+                self._kernel = load_fused_kernel(
+                    head_dim=self.d_head,
+                    tile_size=DEFAULT_TILE_SIZE,
+                )
             except Exception as exc:
                 raise RuntimeError(
                     "FusedLinearAttentionBlock: kernel unavailable.\n"

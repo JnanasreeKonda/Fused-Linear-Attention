@@ -34,6 +34,9 @@ except ImportError:
     _HAS_NVTX = False
 
 
+DEFAULT_TILE_SIZE = int(os.environ.get("FLA_TILE_SIZE", "32"))
+
+
 class FusedQKVAttentionSimulated(nn.Module):
     def __init__(self, embed_dim: int, n_heads: int):
         super().__init__()
@@ -61,6 +64,7 @@ class FusedQKVAttentionKernel(nn.Module):
         assert embed_dim % n_heads == 0
         self.n_heads = n_heads
         self.d_head = embed_dim // n_heads
+        self.tile_size = DEFAULT_TILE_SIZE
 
         self.Wq = nn.Parameter(torch.randn(embed_dim, embed_dim) * 0.02)
         self.Wk = nn.Parameter(torch.randn(embed_dim, embed_dim) * 0.02)
@@ -71,7 +75,7 @@ class FusedQKVAttentionKernel(nn.Module):
         if self._kernel is None:
             from kernel.load_kernel import load_fused_kernel
 
-            self._kernel = load_fused_kernel()
+            self._kernel = load_fused_kernel(head_dim=self.d_head, tile_size=self.tile_size)
         return self._kernel
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -188,7 +192,7 @@ def build_occupancy_sweep() -> List[Dict]:
                     "theoretical_max_blocks_SM": max_blocks,
                     "wall_time_ms": "",
                     "SM_occupancy_pct": "",
-                    "notes": "SELECTED" if tile_size == 64 else "",
+                    "notes": "SELECTED" if tile_size == DEFAULT_TILE_SIZE else "",
                 }
             )
     return rows
@@ -223,6 +227,7 @@ def main():
             _ = model(dummy)
         run_mode = "cuda_kernel"
         print("[fused_bench] Mode: compiled CUDA kernel")
+        print(f"[fused_bench] Tile size : {model.tile_size}")
 
     print(f"[fused_bench] Device    : {device}")
     if device.type == "cuda":
