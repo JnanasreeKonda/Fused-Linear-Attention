@@ -157,6 +157,12 @@ def benchmark_one(
         "kernel_count": 1,
         "HBM_read_bytes_est": hbm_read,
         "HBM_write_bytes_est": hbm_write,
+        "execution_mode": "cuda_measured" if device.type == "cuda" else "cpu_fallback",
+        "kernel_backend": (
+            "compiled_cuda_kernel"
+            if isinstance(model, FusedQKVAttentionKernel)
+            else "simulate_reference"
+        ),
     }
 
 

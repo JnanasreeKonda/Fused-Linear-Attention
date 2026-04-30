@@ -66,27 +66,13 @@ traffic by combining these stages into a single implementation.
 | Real compiled-kernel GPU validation | Partial | Environment-dependent; simulation fallback works, but compiled-kernel runs require a compatible CUDA toolchain. |
 | End-to-end fused PatchTST validation | Partial | The fused wrapper supports reference fallback and CUDA inference, but fully validated fused retraining still depends on a working compiled-kernel environment. |
 
-## What Was Finished For Phase 2 And 3
+## Remaining Work
 
-### Phase 2
-
-- canonical NumPy reference workflow under `tests/`
-- stacked-QKV root oracle path
-- root correctness suite with quick and simulation modes
-- canonical extension loader in `kernel/load_kernel.py`
-- correctness CSV output under `baseline_pipeline/results/`
-
-### Phase 3
-
-- model-side `FusedLinearAttentionBlock`
-- fallback to PyTorch SDPA for CPU, autograd-enabled, or unsupported runtime cases
-- end-to-end validation driver in `baseline_pipeline/model/end_to_end_validate.py`
-- training/evaluation attention-format conversion helpers
-- profiling merge and figure-generation workflow
-- convenience scripts:
-  - `baseline_pipeline/run_phase23.sh`
-  - `baseline_pipeline/run_phase3.sh`
-  - `baseline_pipeline/run_bhanuja.sh`
+- real GPU validation of the fused kernel in this cleaned layout
+- full end-to-end fused PatchTST training run
+- a fused-kernel backward path; current training uses the PyTorch reference
+  attention path for gradients and switches to the fused kernel for inference-only
+  execution when the compiled CUDA extension is available
 
 ## How To Run
 
@@ -124,7 +110,6 @@ python tests/test_correctness.py
 
 ```bash
 cd baseline_pipeline
-chmod +x run_phase23.sh
 ./run_phase23.sh
 ```
 
@@ -160,6 +145,12 @@ cd baseline_pipeline
 ./run_phase3.sh --train-fused
 ```
 
+### Full repo helper
+
+```bash
+./run_all.sh
+```
+
 ## Results
 
 Canonical outputs live under `baseline_pipeline/results/`.
@@ -176,14 +167,14 @@ Important files:
 - `fused_model_metrics.csv`
 - `figures/`
 
-The fused profiling CSV includes a `run_mode` column so simulation-mode runs
+The fused profiling CSV includes comparison metadata so simulation-mode runs
 and real CUDA-kernel runs are distinguishable in the repo and in the final
 report.
 
 ## Limitations
 
-- Final fused-kernel performance claims should only be made from runs where
-  `run_mode=cuda_kernel`.
+- Final fused-kernel performance claims should only be made from directly
+  comparable CUDA-backed runs.
 - The custom CUDA extension can still fail to build on shared systems with
   older toolkit / host compiler combinations.
 - Fully validated fused retraining still depends on a CUDA environment where

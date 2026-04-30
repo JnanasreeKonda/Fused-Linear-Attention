@@ -10,9 +10,24 @@ echo "════════════════════════�
 echo " FusedLinearAttention — Phase 1 (Rithwik)"
 echo "═══════════════════════════════════════════════════════════════"
 
-# ── Install dependencies ─────────────────────────────────────────────────────
-echo -e "\n[0/4] Installing requirements …"
-pip install -q -r requirements.txt
+# ── Dependency check ─────────────────────────────────────────────────────────
+echo -e "\n[0/4] Checking Python dependencies …"
+python3 - <<'PY'
+import importlib
+mods = ["torch", "numpy", "pandas", "matplotlib"]
+missing = []
+for mod in mods:
+    try:
+        importlib.import_module(mod)
+    except Exception:
+        missing.append(mod)
+if missing:
+    raise SystemExit(
+        "Missing Python modules: " + ", ".join(missing) + "\n"
+        "Install them in a virtual environment, then rerun run_phase1.sh."
+    )
+print("[deps] Required modules are available.")
+PY
 
 # ── M5a: Data pipeline smoke-test ────────────────────────────────────────────
 echo -e "\n[1/4] M5 — ETTh1 pipeline smoke-test …"

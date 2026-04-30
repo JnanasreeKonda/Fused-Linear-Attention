@@ -51,14 +51,13 @@ Implemented here:
 - PatchTST baseline model
 - baseline profiling script
 - fused profiling scaffold in the canonical layout
-- model-side fused wrapper with a functional fallback path
-- Phase 2 / 3 helper script in `run_phase23.sh`
-- Phase 3 validation pipeline in `run_phase3.sh` and `model/end_to_end_validate.py`
+- model-side fused wrapper plus Phase 3 validation flow
 
 Partially implemented or still pending:
 
 - full GPU-backed fused-kernel validation from this pipeline
-- end-to-end fused PatchTST training with the cleaned layout using the compiled kernel path
+- fused-kernel backward support for true end-to-end training without the
+  PyTorch-reference fallback
 
 ## Usage
 
@@ -90,7 +89,6 @@ cd baseline_pipeline
 
 ```bash
 cd baseline_pipeline
-chmod +x run_phase23.sh
 ./run_phase23.sh
 ```
 
