@@ -12,7 +12,23 @@ import os
 
 _kernel_cache = {}
 DEFAULT_TILE_SIZE = int(os.environ.get("FLA_TILE_SIZE", "32"))
-DEFAULT_CUDA_ARCH = os.environ.get("TORCH_CUDA_ARCH_LIST", "8.0")
+
+
+def _default_cuda_arch() -> str:
+    override = os.environ.get("TORCH_CUDA_ARCH_LIST")
+    if override:
+        return override
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            major, minor = torch.cuda.get_device_capability()
+            return f"{major}.{minor}"
+    except Exception:
+        pass
+
+    return "8.0"
 
 
 def load_fused_kernel(head_dim: int = 64, tile_size: int = DEFAULT_TILE_SIZE):
@@ -46,11 +62,10 @@ def load_fused_kernel(head_dim: int = 64, tile_size: int = DEFAULT_TILE_SIZE):
             )
 
     os.makedirs(build_dir, exist_ok=True)
-    os.environ.setdefault("TORCH_CUDA_ARCH_LIST", DEFAULT_CUDA_ARCH)
+    os.environ.setdefault("TORCH_CUDA_ARCH_LIST", _default_cuda_arch())
 
     extra_cuda_cflags = [
         "-O3",
-        "-arch=sm_80",
         "--use_fast_math",
         f"-DTILE_SIZE={int(tile_size)}",
         f"-DHEAD_DIM={int(head_dim)}",
