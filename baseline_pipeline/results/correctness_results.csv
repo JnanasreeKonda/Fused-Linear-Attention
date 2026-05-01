@@ -1,0 +1,12 @@
+tag,method,B,S,D,d_head,H,max_abs_diff,mean_abs_diff,pass,error
+B1_S64_dm128_dh64_H1,cuda_kernel,1,64,128,64,1,3e-08,0.0,PASS,
+B1_S128_dm128_dh64_H1,cuda_kernel,1,128,128,64,1,4e-08,0.0,PASS,
+B4_S256_dm128_dh64_H1,cuda_kernel,4,256,128,64,1,3e-08,0.0,PASS,
+B4_S512_dm128_dh64_H1,cuda_kernel,4,512,128,64,1,4e-08,0.0,PASS,
+B4_S1024_dm128_dh64_H1,cuda_kernel,4,1024,128,64,1,4e-08,0.0,PASS,
+B1_S64_dm512_dh64_H4,cuda_kernel,1,64,512,64,4,1.2e-07,2e-08,PASS,
+B1_S128_dm512_dh64_H4,cuda_kernel,1,128,512,64,4,1.3e-07,2e-08,PASS,
+B1_S256_dm512_dh64_H8,cuda_kernel,1,256,512,64,8,1e-07,1e-08,PASS,
+B1_S512_dm512_dh64_H8,cuda_kernel,1,512,512,64,8,1.2e-07,1e-08,PASS,
+B4_S64_dm512_dh64_H8,cuda_kernel,4,64,512,64,8,1.3e-07,2e-08,PASS,
+B4_S128_dm512_dh64_H8,cuda_kernel,4,128,512,64,8,1.2e-07,2e-08,PASS,

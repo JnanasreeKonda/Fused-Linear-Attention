@@ -1,0 +1,3 @@
+method,device,checkpoint_path,checkpoint_source_attention,mean_epoch_time_s,min_epoch_time_s,max_epoch_time_s,forward_per_iter_ms,forward_total_ms,batch_size,input_len,n_features,warmup_iters,timed_iters,speedup_vs_baseline,notes,epoch_speedup_vs_baseline
+baseline_unfused,cuda,/dev/shm/Fused-Linear-Attention/baseline_pipeline/results/best_baseline_model.pt,standard,1.8825,1.7,2.21,0.555134,55.513374,32,96,7,25,100,,reference_baseline,
+fused_kernel,cuda,/dev/shm/Fused-Linear-Attention/baseline_pipeline/results/best_fused_model.pt,fused,2.551,1.81,15.93,1.057141,105.714081,32,96,7,25,100,0.525128,phase3_fused_path,0.737946
