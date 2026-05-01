@@ -24,6 +24,7 @@
 #define X_TILE_OFFSET(row, col) ((row) * PROJ_K_TILE + (col))
 #define W_TILE_OFFSET(row, col) ((row) * HEAD_DIM + (col))
 
+__launch_bounds__(TILE_SIZE, 2)
 __global__ void fused_qkv_attention_kernel(
     const float* __restrict__ X,
     const float* __restrict__ Wq,

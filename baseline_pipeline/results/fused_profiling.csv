@@ -1,6 +1,6 @@
 method,run_mode,seq_len,embed_dim,n_heads,batch_size,warmup_iters,timed_iters,total_elapsed_ms,per_iter_us,peak_alloc_mb,device,gpu_name,kernel_count,HBM_read_bytes_est,HBM_write_bytes_est,execution_mode,kernel_backend
-fused_kernel,cuda_kernel,64,512,8,1,100,500,5173.8472,10347.6943,3.5,cuda,NVIDIA H100,1,3276800,131072,cuda_measured,compiled_cuda_kernel
-fused_kernel,cuda_kernel,128,512,8,1,100,500,18375.8574,36751.7148,3.75,cuda,NVIDIA H100,1,3407872,262144,cuda_measured,compiled_cuda_kernel
-fused_kernel,cuda_kernel,256,512,8,1,100,500,69375.7344,138751.4688,4.25,cuda,NVIDIA H100,1,3670016,524288,cuda_measured,compiled_cuda_kernel
-fused_kernel,cuda_kernel,512,512,8,1,100,500,268357.8125,536715.625,5.25,cuda,NVIDIA H100,1,4194304,1048576,cuda_measured,compiled_cuda_kernel
-fused_kernel,cuda_kernel,1024,512,8,1,100,500,1054991.375,2109982.75,7.25,cuda,NVIDIA H100,1,5242880,2097152,cuda_measured,compiled_cuda_kernel
+fused_kernel,cuda_kernel,64,512,8,1,100,500,436.0168,872.0335,3.5,cuda,NVIDIA H100,1,3276800,131072,cuda_measured,compiled_cuda_kernel
+fused_kernel,cuda_kernel,128,512,8,1,100,500,711.0717,1422.1433,3.75,cuda,NVIDIA H100,1,3407872,262144,cuda_measured,compiled_cuda_kernel
+fused_kernel,cuda_kernel,256,512,8,1,100,500,1266.3704,2532.7407,4.25,cuda,NVIDIA H100,1,3670016,524288,cuda_measured,compiled_cuda_kernel
+fused_kernel,cuda_kernel,512,512,8,1,100,500,2368.6689,4737.3379,5.25,cuda,NVIDIA H100,1,4194304,1048576,cuda_measured,compiled_cuda_kernel
+fused_kernel,cuda_kernel,1024,512,8,1,100,500,4562.4102,9124.8203,7.25,cuda,NVIDIA H100,1,5242880,2097152,cuda_measured,compiled_cuda_kernel
