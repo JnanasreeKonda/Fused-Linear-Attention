@@ -1,0 +1,3 @@
+method,mse,mae,mse_delta_pct_vs_baseline,mae_delta_pct_vs_baseline,within_1pct,checkpoint_path
+baseline_unfused,180.46336365,12.64666843,0.0,0.0,reference,/dev/shm/Fused-Linear-Attention/baseline_pipeline/results/best_baseline_model.pt
+fused_kernel,213.44288635,13.50915241,18.274913,6.81985129,NO,/dev/shm/Fused-Linear-Attention/baseline_pipeline/results/best_fused_model.pt

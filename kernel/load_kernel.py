@@ -9,11 +9,47 @@ instead of reaching into any archived bundle directory.
 from __future__ import annotations
 
 import os
+from typing import Optional
 
 _kernel_cache = {}
 
 
-def load_fused_kernel(head_dim: int = 64, tile_size: int = 64):
+def _default_cuda_arch() -> str:
+    override = os.environ.get("TORCH_CUDA_ARCH_LIST")
+    if override:
+        return override
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            major, minor = torch.cuda.get_device_capability()
+            return f"{major}.{minor}"
+    except Exception:
+        pass
+
+    return "8.0"
+
+
+def _default_tile_size() -> int:
+    override = os.environ.get("FLA_TILE_SIZE")
+    if override:
+        return int(override)
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            major, _minor = torch.cuda.get_device_capability()
+            if major >= 9:
+                return 64
+    except Exception:
+        pass
+
+    return 32
+
+
+def load_fused_kernel(head_dim: int = 64, tile_size: Optional[int] = None):
     """
     JIT-compile the CUDA extension and return the loaded module.
 
@@ -24,6 +60,8 @@ def load_fused_kernel(head_dim: int = 64, tile_size: int = 64):
     configuration.
     """
     global _kernel_cache
+    if tile_size is None:
+        tile_size = _default_tile_size()
     cache_key = (int(head_dim), int(tile_size))
     if cache_key in _kernel_cache:
         return _kernel_cache[cache_key]
@@ -44,10 +82,10 @@ def load_fused_kernel(head_dim: int = 64, tile_size: int = 64):
             )
 
     os.makedirs(build_dir, exist_ok=True)
+    os.environ.setdefault("TORCH_CUDA_ARCH_LIST", _default_cuda_arch())
 
     extra_cuda_cflags = [
         "-O3",
-        "-arch=sm_80",
         "--use_fast_math",
         f"-DTILE_SIZE={int(tile_size)}",
         f"-DHEAD_DIM={int(head_dim)}",

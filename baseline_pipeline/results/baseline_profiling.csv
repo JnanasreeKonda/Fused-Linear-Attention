@@ -1,0 +1,6 @@
+method,seq_len,embed_dim,n_heads,batch_size,warmup_iters,timed_iters,total_elapsed_ms,per_iter_us,peak_alloc_mb,kernel_count,HBM_read_bytes_est,HBM_write_bytes_est,device,gpu_name,execution_mode,kernel_backend
+baseline_unfused,64,512,8,1,100,500,54.8724,109.7448,36.75,2,3670016,524288,cuda,NVIDIA H100,cuda_measured,pytorch_unfused
+baseline_unfused,128,512,8,1,100,500,54.5767,109.1533,37.5,2,4194304,1048576,cuda,NVIDIA H100,cuda_measured,pytorch_unfused
+baseline_unfused,256,512,8,1,100,500,54.4614,108.9229,39.0,2,5242880,2097152,cuda,NVIDIA H100,cuda_measured,pytorch_unfused
+baseline_unfused,512,512,8,1,100,500,59.2515,118.503,42.0,2,7340032,4194304,cuda,NVIDIA H100,cuda_measured,pytorch_unfused
+baseline_unfused,1024,512,8,1,100,500,99.2683,198.5365,48.0,2,11534336,8388608,cuda,NVIDIA H100,cuda_measured,pytorch_unfused
