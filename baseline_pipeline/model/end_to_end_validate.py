@@ -194,17 +194,9 @@ def main():
 
     if args.train_fused:
         set_seed()
-        fused_dropout = args.dropout
-        if device.type == "cuda" and fused_dropout > 0:
-            print(
-                "[m10] Fused CUDA attention does not implement attention-weight "
-                "dropout in the custom kernel yet; forcing dropout=0.0 for "
-                "fused retraining."
-            )
-            fused_dropout = 0.0
         fused_model = PatchTST(
             attn_block_class=resolve_attention_block("fused"),
-            dropout=fused_dropout,
+            dropout=args.dropout,
         ).to(device)
         print("[m10] Training fused-attention PatchTST from scratch...")
         train(

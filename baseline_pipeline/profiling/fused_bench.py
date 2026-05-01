@@ -175,7 +175,7 @@ def build_occupancy_sweep() -> List[Dict]:
 
     rows = []
     for tile_size in tile_sizes:
-        shmem_bytes = 3 * tile_size * (d_head + 1) * 4
+        shmem_bytes = 3 * tile_size * d_head * 4
         shmem_kb = shmem_bytes / 1024
         max_blocks = int(shmem_total_kb / shmem_kb) if shmem_kb > 0 else 0
         for seq_len in seq_lens:
@@ -199,6 +199,7 @@ def main():
     parser.add_argument("--simulate", action="store_true")
     parser.add_argument("--no-cuda", action="store_true")
     parser.add_argument("--out", default="results/fused_profiling.csv")
+    parser.add_argument("--sweep-out", default="results/occupancy_sweep.csv")
     parser.add_argument("--seq-len", type=int, default=None)
     parser.add_argument("--warmup", type=int, default=config.WARMUP_ITERS)
     parser.add_argument("--timed", type=int, default=config.TIMED_ITERS)
@@ -259,13 +260,12 @@ def main():
         writer.writerows(results)
     print(f"\n[fused_bench] Saved -> {args.out}")
 
-    sweep_path = "results/occupancy_sweep.csv"
     sweep_rows = build_occupancy_sweep()
-    with open(sweep_path, "w", newline="") as f:
+    with open(args.sweep_out, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(sweep_rows[0].keys()))
         writer.writeheader()
         writer.writerows(sweep_rows)
-    print(f"[fused_bench] Saved -> {sweep_path}")
+    print(f"[fused_bench] Saved -> {args.sweep_out}")
 
 
 if __name__ == "__main__":

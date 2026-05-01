@@ -258,18 +258,9 @@ def main():
     )
 
     attn_block_class = resolve_attention_block(attention_name)
-    effective_dropout = args.dropout
-    if attention_name == "fused" and device.type == "cuda" and effective_dropout > 0:
-        print(
-            "[train] Fused CUDA attention does not implement attention-weight "
-            "dropout in the custom kernel yet; forcing dropout=0.0 for the "
-            "fused training run."
-        )
-        effective_dropout = 0.0
-
     model = PatchTST(
         attn_block_class=attn_block_class,
-        dropout=effective_dropout,
+        dropout=args.dropout,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[train] Parameters : {n_params:,}")

@@ -59,7 +59,11 @@ shmem per block = 4 × T × (d + 1) × 4 bytes
 | 128 | 133,120 | 130.00 | ✓ (tight) | 1 |
 
 **Selected tile size: T = 64.**  
-Rationale: 65 KB leaves 99 KB headroom; supports 2 resident blocks/SM. T=128 forces 1 block/SM (130 KB), killing SM utilisation. T=32 under-fills warps. The M9 occupancy sweep confirms T=64 empirically.
+Rationale: it matches one warp-aligned block of query rows and remains the
+project's canonical benchmark shape. The current checked-in kernel uses an
+unpadded `HEAD_DIM` stride so it fits within the default 48 KiB per-block
+shared-memory budget on Colab A100 builds. Larger tiles still collapse
+occupancy sharply, while T=32 under-fills the block.
 
 ---
 
@@ -70,7 +74,7 @@ A100 has 32 banks × 4 bytes. Array `float arr[T][64]` has inner stride = 64 wor
 Thread `i` accessing column `c` → bank `(i×64 + c) % 32 = c % 32`.
 For fixed `c`, all 32 warp threads hit **bank `c % 32`** → 32-way bank conflict.
 
-### The fix: pad inner dimension to `d + 1`
+### The original fix: pad inner dimension to `d + 1`
 ```cuda
 __shared__ float sQ[TILE_SIZE][HEAD_DIM + 1];   // [64][65]
 __shared__ float sK[TILE_SIZE][HEAD_DIM + 1];
@@ -82,7 +86,9 @@ Thread `i` accessing column `c` → bank `(i×65 + c) % 32 = (i + c) % 32` (sinc
 Warp threads 0..31 map to banks `c%32, (c+1)%32, …, (c+31)%32` — **all 32 distinct. Zero conflicts.**
 
 Overhead: 4 arrays × T × 1 padding column × 4 bytes = 16T bytes.
-At T=64: 1,024 bytes extra — negligible.
+At T=64: 1,024 bytes extra. In practice, the production repo drops this padding
+to stay under the default 48 KiB launch limit on Colab A100 without requiring a
+larger shared-memory carveout.
 
 ---
 

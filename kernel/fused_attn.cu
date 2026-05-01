@@ -18,7 +18,11 @@
 #define HEAD_DIM 64
 #endif
 
-#define SHMEM_STRIDE (HEAD_DIM + 1)
+// A100's default per-block shared-memory budget is 48 KiB unless a kernel
+// opts into a larger carveout. The original "+1" padding exceeded that limit
+// for TILE_SIZE=64, HEAD_DIM=64 (49,920 bytes across Q/K/V), which prevented
+// Colab A100 builds from launching. The unpadded layout stays within budget.
+#define SHMEM_STRIDE HEAD_DIM
 
 __global__ void fused_qkv_attention_kernel(
     const float* __restrict__ X,

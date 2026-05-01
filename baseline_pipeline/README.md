@@ -107,10 +107,10 @@ timing/validation artifacts.
 
 The fused CUDA training path now uses:
 
-- the compiled CUDA kernel for attention forward
-- a custom autograd backward bridge for gradients
-- `dropout=0.0` automatically for fused training, because the custom kernel
-  does not implement attention-weight dropout
+- the reference PyTorch attention path during training whenever attention
+  dropout is active, so training semantics stay aligned with the baseline
+- the compiled CUDA kernel for eval/inference-time fused attention
+- the custom autograd backward bridge only for no-dropout fused experiments
 
 ## Team Work Reflected In This Folder
 
