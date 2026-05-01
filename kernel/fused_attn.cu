@@ -19,7 +19,10 @@
 #endif
 
 #define SHMEM_STRIDE (HEAD_DIM + 1)
+#define PROJ_K_TILE 8
 #define TILE_OFFSET(row, col) ((row) * SHMEM_STRIDE + (col))
+#define X_TILE_OFFSET(row, col) ((row) * PROJ_K_TILE + (col))
+#define W_TILE_OFFSET(row, col) ((row) * HEAD_DIM + (col))
 
 __global__ void fused_qkv_attention_kernel(
     const float* __restrict__ X,
@@ -44,24 +47,15 @@ __global__ void fused_qkv_attention_kernel(
     float* sQ = shared_mem;
     float* sK = sQ + TILE_SIZE * SHMEM_STRIDE;
     float* sV = sK + TILE_SIZE * SHMEM_STRIDE;
+    float* sX = sV + TILE_SIZE * SHMEM_STRIDE;
+    float* sW0 = sX + TILE_SIZE * PROJ_K_TILE;
+    float* sW1 = sW0 + PROJ_K_TILE * HEAD_DIM;
 
     const int q_global = tile_q * TILE_SIZE + tid;
 
-    if (q_global < N) {
-        #pragma unroll
-        for (int c = 0; c < HEAD_DIM; ++c) {
-            float acc = 0.0f;
-            for (int k = 0; k < D; ++k) {
-                acc += x_b[static_cast<long long>(q_global) * D + k]
-                     * Wq[static_cast<long long>(k) * H * d_head + head_col_start + c];
-            }
-            sQ[TILE_OFFSET(tid, c)] = acc;
-        }
-    } else {
-        #pragma unroll
-        for (int c = 0; c < HEAD_DIM; ++c) {
-            sQ[TILE_OFFSET(tid, c)] = 0.0f;
-        }
+    #pragma unroll
+    for (int c = 0; c < HEAD_DIM; ++c) {
+        sQ[TILE_OFFSET(tid, c)] = 0.0f;
     }
 
     float o_acc[HEAD_DIM];
@@ -74,31 +68,84 @@ __global__ void fused_qkv_attention_kernel(
 
     __syncthreads();
 
-    for (int tile_kv = 0; tile_kv * TILE_SIZE < N; ++tile_kv) {
-        const int kv_global = tile_kv * TILE_SIZE + tid;
+    for (int k_base = 0; k_base < D; k_base += PROJ_K_TILE) {
+        #pragma unroll
+        for (int kk = 0; kk < PROJ_K_TILE; ++kk) {
+            const int gk = k_base + kk;
+            sX[X_TILE_OFFSET(tid, kk)] = (q_global < N && gk < D)
+                ? x_b[static_cast<long long>(q_global) * D + gk]
+                : 0.0f;
+        }
 
-        if (kv_global < N) {
+        for (int idx = tid; idx < PROJ_K_TILE * HEAD_DIM; idx += TILE_SIZE) {
+            const int kk = idx / HEAD_DIM;
+            const int c = idx % HEAD_DIM;
+            const int gk = k_base + kk;
+            sW0[W_TILE_OFFSET(kk, c)] = (gk < D)
+                ? Wq[static_cast<long long>(gk) * H * d_head + head_col_start + c]
+                : 0.0f;
+        }
+
+        __syncthreads();
+
+        #pragma unroll
+        for (int kk = 0; kk < PROJ_K_TILE; ++kk) {
+            const float xval = sX[X_TILE_OFFSET(tid, kk)];
             #pragma unroll
             for (int c = 0; c < HEAD_DIM; ++c) {
-                float accK = 0.0f;
-                float accV = 0.0f;
-                for (int k = 0; k < D; ++k) {
-                    const float xval = x_b[static_cast<long long>(kv_global) * D + k];
-                    accK += xval * Wk[static_cast<long long>(k) * H * d_head + head_col_start + c];
-                    accV += xval * Wv[static_cast<long long>(k) * H * d_head + head_col_start + c];
-                }
-                sK[TILE_OFFSET(tid, c)] = accK;
-                sV[TILE_OFFSET(tid, c)] = accV;
-            }
-        } else {
-            #pragma unroll
-            for (int c = 0; c < HEAD_DIM; ++c) {
-                sK[TILE_OFFSET(tid, c)] = 0.0f;
-                sV[TILE_OFFSET(tid, c)] = 0.0f;
+                sQ[TILE_OFFSET(tid, c)] += xval * sW0[W_TILE_OFFSET(kk, c)];
             }
         }
 
         __syncthreads();
+    }
+
+    for (int tile_kv = 0; tile_kv * TILE_SIZE < N; ++tile_kv) {
+        const int kv_global = tile_kv * TILE_SIZE + tid;
+
+        #pragma unroll
+        for (int c = 0; c < HEAD_DIM; ++c) {
+            sK[TILE_OFFSET(tid, c)] = 0.0f;
+            sV[TILE_OFFSET(tid, c)] = 0.0f;
+        }
+
+        __syncthreads();
+
+        for (int k_base = 0; k_base < D; k_base += PROJ_K_TILE) {
+            #pragma unroll
+            for (int kk = 0; kk < PROJ_K_TILE; ++kk) {
+                const int gk = k_base + kk;
+                sX[X_TILE_OFFSET(tid, kk)] = (kv_global < N && gk < D)
+                    ? x_b[static_cast<long long>(kv_global) * D + gk]
+                    : 0.0f;
+            }
+
+            for (int idx = tid; idx < PROJ_K_TILE * HEAD_DIM; idx += TILE_SIZE) {
+                const int kk = idx / HEAD_DIM;
+                const int c = idx % HEAD_DIM;
+                const int gk = k_base + kk;
+                sW0[W_TILE_OFFSET(kk, c)] = (gk < D)
+                    ? Wk[static_cast<long long>(gk) * H * d_head + head_col_start + c]
+                    : 0.0f;
+                sW1[W_TILE_OFFSET(kk, c)] = (gk < D)
+                    ? Wv[static_cast<long long>(gk) * H * d_head + head_col_start + c]
+                    : 0.0f;
+            }
+
+            __syncthreads();
+
+            #pragma unroll
+            for (int kk = 0; kk < PROJ_K_TILE; ++kk) {
+                const float xval = sX[X_TILE_OFFSET(tid, kk)];
+                #pragma unroll
+                for (int c = 0; c < HEAD_DIM; ++c) {
+                    sK[TILE_OFFSET(tid, c)] += xval * sW0[W_TILE_OFFSET(kk, c)];
+                    sV[TILE_OFFSET(tid, c)] += xval * sW1[W_TILE_OFFSET(kk, c)];
+                }
+            }
+
+            __syncthreads();
+        }
 
         float m_tile = -FLT_MAX;
         float scores[TILE_SIZE];
@@ -171,7 +218,12 @@ extern "C" void launch_fused_attention(
     const int n_q_tiles = (N + TILE_SIZE - 1) / TILE_SIZE;
     dim3 grid(B, H, n_q_tiles);
     dim3 block(TILE_SIZE);
-    const size_t shmem_bytes = 3 * TILE_SIZE * SHMEM_STRIDE * sizeof(float);
+    const size_t shmem_bytes =
+        (
+            3 * TILE_SIZE * SHMEM_STRIDE
+            + TILE_SIZE * PROJ_K_TILE
+            + 2 * PROJ_K_TILE * HEAD_DIM
+        ) * sizeof(float);
 
     cudaFuncSetAttribute(
         fused_qkv_attention_kernel,
