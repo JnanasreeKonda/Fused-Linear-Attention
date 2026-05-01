@@ -22,7 +22,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-DEFAULT_TILE_SIZE = int(os.environ.get("FLA_TILE_SIZE", "32"))
+DEFAULT_TILE_SIZE = int(os.environ.get("FLA_TILE_SIZE", "64"))
 
 
 def _reference_attention_forward(

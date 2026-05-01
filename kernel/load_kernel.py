@@ -9,9 +9,9 @@ instead of reaching into any archived bundle directory.
 from __future__ import annotations
 
 import os
+from typing import Optional
 
 _kernel_cache = {}
-DEFAULT_TILE_SIZE = int(os.environ.get("FLA_TILE_SIZE", "32"))
 
 
 def _default_cuda_arch() -> str:
@@ -31,7 +31,25 @@ def _default_cuda_arch() -> str:
     return "8.0"
 
 
-def load_fused_kernel(head_dim: int = 64, tile_size: int = DEFAULT_TILE_SIZE):
+def _default_tile_size() -> int:
+    override = os.environ.get("FLA_TILE_SIZE")
+    if override:
+        return int(override)
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            major, _minor = torch.cuda.get_device_capability()
+            if major >= 9:
+                return 64
+    except Exception:
+        pass
+
+    return 32
+
+
+def load_fused_kernel(head_dim: int = 64, tile_size: Optional[int] = None):
     """
     JIT-compile the CUDA extension and return the loaded module.
 
@@ -42,6 +60,8 @@ def load_fused_kernel(head_dim: int = 64, tile_size: int = DEFAULT_TILE_SIZE):
     configuration.
     """
     global _kernel_cache
+    if tile_size is None:
+        tile_size = _default_tile_size()
     cache_key = (int(head_dim), int(tile_size))
     if cache_key in _kernel_cache:
         return _kernel_cache[cache_key]

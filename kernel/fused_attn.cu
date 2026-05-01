@@ -3,7 +3,7 @@
  *
  * This is the consolidated version of the implementation that previously lived
  * in the draft bundle directory. The current kernel targets the benchmark
- * configuration TILE_SIZE=32 and HEAD_DIM=64 on modern NVIDIA GPUs.
+ * configuration TILE_SIZE=64 and HEAD_DIM=64 on modern NVIDIA GPUs.
  */
 
 #include <cuda_runtime.h>
@@ -19,6 +19,7 @@
 #endif
 
 #define SHMEM_STRIDE (HEAD_DIM + 1)
+#define TILE_OFFSET(row, col) ((row) * SHMEM_STRIDE + (col))
 
 __global__ void fused_qkv_attention_kernel(
     const float* __restrict__ X,
@@ -39,9 +40,10 @@ __global__ void fused_qkv_attention_kernel(
     const float* x_b = X + static_cast<long long>(b) * N * D;
     float* out_bh = Out + (static_cast<long long>(b) * H + h) * N * d_head;
 
-    __shared__ float sQ[TILE_SIZE][SHMEM_STRIDE];
-    __shared__ float sK[TILE_SIZE][SHMEM_STRIDE];
-    __shared__ float sV[TILE_SIZE][SHMEM_STRIDE];
+    extern __shared__ float shared_mem[];
+    float* sQ = shared_mem;
+    float* sK = sQ + TILE_SIZE * SHMEM_STRIDE;
+    float* sV = sK + TILE_SIZE * SHMEM_STRIDE;
 
     const int q_global = tile_q * TILE_SIZE + tid;
 
@@ -53,12 +55,12 @@ __global__ void fused_qkv_attention_kernel(
                 acc += x_b[static_cast<long long>(q_global) * D + k]
                      * Wq[static_cast<long long>(k) * H * d_head + head_col_start + c];
             }
-            sQ[tid][c] = acc;
+            sQ[TILE_OFFSET(tid, c)] = acc;
         }
     } else {
         #pragma unroll
         for (int c = 0; c < HEAD_DIM; ++c) {
-            sQ[tid][c] = 0.0f;
+            sQ[TILE_OFFSET(tid, c)] = 0.0f;
         }
     }
 
@@ -85,14 +87,14 @@ __global__ void fused_qkv_attention_kernel(
                     accK += xval * Wk[static_cast<long long>(k) * H * d_head + head_col_start + c];
                     accV += xval * Wv[static_cast<long long>(k) * H * d_head + head_col_start + c];
                 }
-                sK[tid][c] = accK;
-                sV[tid][c] = accV;
+                sK[TILE_OFFSET(tid, c)] = accK;
+                sV[TILE_OFFSET(tid, c)] = accV;
             }
         } else {
             #pragma unroll
             for (int c = 0; c < HEAD_DIM; ++c) {
-                sK[tid][c] = 0.0f;
-                sV[tid][c] = 0.0f;
+                sK[TILE_OFFSET(tid, c)] = 0.0f;
+                sV[TILE_OFFSET(tid, c)] = 0.0f;
             }
         }
 
@@ -111,7 +113,7 @@ __global__ void fused_qkv_attention_kernel(
             float dot = 0.0f;
             #pragma unroll
             for (int c = 0; c < HEAD_DIM; ++c) {
-                dot += sQ[tid][c] * sK[j][c];
+                dot += sQ[TILE_OFFSET(tid, c)] * sK[TILE_OFFSET(j, c)];
             }
             scores[j] = dot * scale;
             if (scores[j] > m_tile) {
@@ -138,7 +140,7 @@ __global__ void fused_qkv_attention_kernel(
             l_tile += e;
             #pragma unroll
             for (int c = 0; c < HEAD_DIM; ++c) {
-                o_acc[c] += e * sV[j][c];
+                o_acc[c] += e * sV[TILE_OFFSET(j, c)];
             }
         }
 
@@ -169,8 +171,20 @@ extern "C" void launch_fused_attention(
     const int n_q_tiles = (N + TILE_SIZE - 1) / TILE_SIZE;
     dim3 grid(B, H, n_q_tiles);
     dim3 block(TILE_SIZE);
+    const size_t shmem_bytes = 3 * TILE_SIZE * SHMEM_STRIDE * sizeof(float);
 
-    fused_qkv_attention_kernel<<<grid, block, 0, stream>>>(
+    cudaFuncSetAttribute(
+        fused_qkv_attention_kernel,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        static_cast<int>(shmem_bytes)
+    );
+    cudaFuncSetAttribute(
+        fused_qkv_attention_kernel,
+        cudaFuncAttributePreferredSharedMemoryCarveout,
+        100
+    );
+
+    fused_qkv_attention_kernel<<<grid, block, shmem_bytes, stream>>>(
         X, Wq, Wk, Wv, Out, B, H, N, D, d_head
     );
 }

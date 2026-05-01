@@ -34,7 +34,7 @@ except ImportError:
     _HAS_NVTX = False
 
 
-DEFAULT_TILE_SIZE = int(os.environ.get("FLA_TILE_SIZE", "32"))
+DEFAULT_TILE_SIZE = int(os.environ.get("FLA_TILE_SIZE", "64"))
 
 
 class FusedQKVAttentionSimulated(nn.Module):
