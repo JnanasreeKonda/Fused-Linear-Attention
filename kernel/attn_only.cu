@@ -43,6 +43,82 @@ __device__ inline float scalar_to_float<__nv_bfloat16>(__nv_bfloat16 value) {
     return __bfloat162float(value);
 }
 
+template <typename scalar_t>
+__device__ inline void load_row_to_float(
+    float* __restrict__ dst,
+    const scalar_t* __restrict__ src,
+    bool valid_row
+) {
+    #pragma unroll
+    for (int c = 0; c < HEAD_DIM; ++c) {
+        dst[c] = valid_row ? scalar_to_float(src[c]) : 0.0f;
+    }
+}
+
+template <>
+__device__ inline void load_row_to_float<float>(
+    float* __restrict__ dst,
+    const float* __restrict__ src,
+    bool valid_row
+) {
+    if (!valid_row) {
+        #pragma unroll
+        for (int c = 0; c < HEAD_DIM; ++c) {
+            dst[c] = 0.0f;
+        }
+        return;
+    }
+    #pragma unroll
+    for (int c = 0; c < HEAD_DIM; c += 4) {
+        *reinterpret_cast<float4*>(dst + c) =
+            *reinterpret_cast<const float4*>(src + c);
+    }
+}
+
+template <>
+__device__ inline void load_row_to_float<__half>(
+    float* __restrict__ dst,
+    const __half* __restrict__ src,
+    bool valid_row
+) {
+    if (!valid_row) {
+        #pragma unroll
+        for (int c = 0; c < HEAD_DIM; ++c) {
+            dst[c] = 0.0f;
+        }
+        return;
+    }
+    #pragma unroll
+    for (int c = 0; c < HEAD_DIM; c += 2) {
+        const float2 vals = __half22float2(*reinterpret_cast<const __half2*>(src + c));
+        dst[c] = vals.x;
+        dst[c + 1] = vals.y;
+    }
+}
+
+template <>
+__device__ inline void load_row_to_float<__nv_bfloat16>(
+    float* __restrict__ dst,
+    const __nv_bfloat16* __restrict__ src,
+    bool valid_row
+) {
+    if (!valid_row) {
+        #pragma unroll
+        for (int c = 0; c < HEAD_DIM; ++c) {
+            dst[c] = 0.0f;
+        }
+        return;
+    }
+    #pragma unroll
+    for (int c = 0; c < HEAD_DIM; c += 2) {
+        const float2 vals = __bfloat1622float2(
+            *reinterpret_cast<const __nv_bfloat162*>(src + c)
+        );
+        dst[c] = vals.x;
+        dst[c + 1] = vals.y;
+    }
+}
+
 __device__ inline float dot_shared_rows(
     const float* __restrict__ lhs,
     const float* __restrict__ rhs
@@ -99,18 +175,11 @@ __global__ void attn_only_kernel(
     float* sK = sQ + TILE_SIZE * SHMEM_STRIDE;
     float* sV = sK + TILE_SIZE * SHMEM_STRIDE;
 
-    if (q_global < N) {
-        #pragma unroll
-        for (int c = 0; c < HEAD_DIM; ++c) {
-            sQ[TILE_OFFSET(tid, c)] =
-                scalar_to_float(q_bh[static_cast<long long>(q_global) * d_head + c]);
-        }
-    } else {
-        #pragma unroll
-        for (int c = 0; c < HEAD_DIM; ++c) {
-            sQ[TILE_OFFSET(tid, c)] = 0.0f;
-        }
-    }
+    load_row_to_float(
+        &sQ[TILE_OFFSET(tid, 0)],
+        q_bh + static_cast<long long>(q_global) * d_head,
+        q_global < N
+    );
 
     float o_acc[HEAD_DIM];
     float m_i = -FLT_MAX;
@@ -125,21 +194,16 @@ __global__ void attn_only_kernel(
     for (int tile_kv = 0; tile_kv * TILE_SIZE < N; ++tile_kv) {
         const int kv_global = tile_kv * TILE_SIZE + tid;
 
-        if (kv_global < N) {
-            #pragma unroll
-            for (int c = 0; c < HEAD_DIM; ++c) {
-                sK[TILE_OFFSET(tid, c)] =
-                    scalar_to_float(k_bh[static_cast<long long>(kv_global) * d_head + c]);
-                sV[TILE_OFFSET(tid, c)] =
-                    scalar_to_float(v_bh[static_cast<long long>(kv_global) * d_head + c]);
-            }
-        } else {
-            #pragma unroll
-            for (int c = 0; c < HEAD_DIM; ++c) {
-                sK[TILE_OFFSET(tid, c)] = 0.0f;
-                sV[TILE_OFFSET(tid, c)] = 0.0f;
-            }
-        }
+        load_row_to_float(
+            &sK[TILE_OFFSET(tid, 0)],
+            k_bh + static_cast<long long>(kv_global) * d_head,
+            kv_global < N
+        );
+        load_row_to_float(
+            &sV[TILE_OFFSET(tid, 0)],
+            v_bh + static_cast<long long>(kv_global) * d_head,
+            kv_global < N
+        );
 
         __syncthreads();
 
