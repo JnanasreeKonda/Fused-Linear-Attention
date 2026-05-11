@@ -167,6 +167,49 @@ class HybridProjectedAttentionKernel(nn.Module):
         )
 
 
+class HybridProjectedAttentionWarp4Kernel(nn.Module):
+    def __init__(self, embed_dim: int, n_heads: int, kernel_dtype: str = "float32"):
+        super().__init__()
+        assert embed_dim % n_heads == 0
+        self.n_heads = n_heads
+        self.d_head = embed_dim // n_heads
+        self.tile_size = DEFAULT_TILE_SIZE
+        self.kernel_dtype = kernel_dtype
+        self.input_dtype = _torch_dtype_from_name(kernel_dtype)
+
+        self.Wq = nn.Parameter((torch.randn(embed_dim, embed_dim) * 0.02).to(self.input_dtype))
+        self.Wk = nn.Parameter((torch.randn(embed_dim, embed_dim) * 0.02).to(self.input_dtype))
+        self.Wv = nn.Parameter((torch.randn(embed_dim, embed_dim) * 0.02).to(self.input_dtype))
+        self._kernel = None
+
+    def _get_kernel(self):
+        if self._kernel is None:
+            from kernel.load_attn_only_warp4 import load_attn_only_warp4_kernel
+
+            self._kernel = load_attn_only_warp4_kernel(
+                head_dim=self.d_head,
+                tile_size=self.tile_size,
+                kernel_dtype=self.kernel_dtype,
+            )
+        return self._kernel
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, N, D = x.shape
+        x_kernel = x.contiguous().to(self.input_dtype)
+        q = (x_kernel @ self.Wq).view(B, N, self.n_heads, self.d_head).transpose(1, 2).contiguous()
+        k = (x_kernel @ self.Wk).view(B, N, self.n_heads, self.d_head).transpose(1, 2).contiguous()
+        v = (x_kernel @ self.Wv).view(B, N, self.n_heads, self.d_head).transpose(1, 2).contiguous()
+        return self._get_kernel().forward(
+            q,
+            k,
+            v,
+            B,
+            self.n_heads,
+            N,
+            self.d_head,
+        )
+
+
 def benchmark_one(
     model: nn.Module,
     seq_len: int,
@@ -245,7 +288,11 @@ def benchmark_one(
             else (
                 "hybrid_projected_attention"
                 if isinstance(model, HybridProjectedAttentionKernel)
-                else "simulate_reference"
+                else (
+                    "hybrid_projected_attention_warp4"
+                    if isinstance(model, HybridProjectedAttentionWarp4Kernel)
+                    else "simulate_reference"
+                )
             )
         ),
         "kernel_dtype": str(input_dtype).replace("torch.", ""),
@@ -290,7 +337,7 @@ def main():
     parser.add_argument("--timed", type=int, default=config.TIMED_ITERS)
     parser.add_argument("--kernel-dtype", default=DEFAULT_KERNEL_DTYPE, choices=["float32", "float16", "bfloat16"])
     parser.add_argument("--proj-k-tile", type=int, default=DEFAULT_PROJ_K_TILE, choices=[8, 16, 32])
-    parser.add_argument("--backend", default="fused", choices=["fused", "hybrid", "simulate"])
+    parser.add_argument("--backend", default="fused", choices=["fused", "hybrid", "hybrid_warp4", "simulate"])
     args = parser.parse_args()
 
     device = torch.device("cpu" if (args.no_cuda or not torch.cuda.is_available()) else "cuda")
@@ -308,6 +355,8 @@ def main():
             raise RuntimeError("Compiled fused kernel requires CUDA. Use --simulate for CPU validation.")
         if args.backend == "hybrid":
             model = HybridProjectedAttentionKernel(embed_dim, n_heads, kernel_dtype=args.kernel_dtype).to(device).eval()
+        elif args.backend == "hybrid_warp4":
+            model = HybridProjectedAttentionWarp4Kernel(embed_dim, n_heads, kernel_dtype=args.kernel_dtype).to(device).eval()
         else:
             model = FusedQKVAttentionKernel(embed_dim, n_heads, kernel_dtype=args.kernel_dtype).to(device).eval()
             model.proj_k_tile = args.proj_k_tile

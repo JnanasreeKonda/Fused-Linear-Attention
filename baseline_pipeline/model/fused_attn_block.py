@@ -201,14 +201,23 @@ class FusedLinearAttentionBlock(nn.Module):
     def _load_kernel(self):
         if self._kernel is None:
             try:
-                if DEFAULT_ATTN_BACKEND == "hybrid":
-                    from kernel.load_attn_only import load_attn_only_kernel
+                if DEFAULT_ATTN_BACKEND in {"hybrid", "hybrid_warp4"}:
+                    if DEFAULT_ATTN_BACKEND == "hybrid_warp4":
+                        from kernel.load_attn_only_warp4 import load_attn_only_warp4_kernel
 
-                    self._kernel = load_attn_only_kernel(
-                        head_dim=self.d_head,
-                        tile_size=DEFAULT_TILE_SIZE,
-                        kernel_dtype=DEFAULT_KERNEL_DTYPE,
-                    )
+                        self._kernel = load_attn_only_warp4_kernel(
+                            head_dim=self.d_head,
+                            tile_size=DEFAULT_TILE_SIZE,
+                            kernel_dtype=DEFAULT_KERNEL_DTYPE,
+                        )
+                    else:
+                        from kernel.load_attn_only import load_attn_only_kernel
+
+                        self._kernel = load_attn_only_kernel(
+                            head_dim=self.d_head,
+                            tile_size=DEFAULT_TILE_SIZE,
+                            kernel_dtype=DEFAULT_KERNEL_DTYPE,
+                        )
                 else:
                     from kernel.load_kernel import load_fused_kernel
 
@@ -285,7 +294,7 @@ class FusedLinearAttentionBlock(nn.Module):
         q_w = self.q_proj.weight.t().contiguous().to(kernel_dtype)
         k_w = self.k_proj.weight.t().contiguous().to(kernel_dtype)
         v_w = self.v_proj.weight.t().contiguous().to(kernel_dtype)
-        if DEFAULT_ATTN_BACKEND == "hybrid":
+        if DEFAULT_ATTN_BACKEND in {"hybrid", "hybrid_warp4"}:
             out = _HybridAttentionAutogradFn.apply(
                 x_kernel,
                 q_w,
