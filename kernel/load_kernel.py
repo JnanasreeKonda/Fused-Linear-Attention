@@ -49,7 +49,30 @@ def _default_tile_size() -> int:
     return 32
 
 
-def load_fused_kernel(head_dim: int = 64, tile_size: Optional[int] = None):
+def _normalize_kernel_dtype(kernel_dtype: Optional[str]) -> str:
+    value = kernel_dtype or os.environ.get("FLA_KERNEL_DTYPE", "float32")
+    normalized = value.lower()
+    aliases = {
+        "fp32": "float32",
+        "float32": "float32",
+        "f32": "float32",
+        "fp16": "float16",
+        "float16": "float16",
+        "f16": "float16",
+        "half": "float16",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            f"Unsupported kernel dtype '{value}'. Expected one of: float32, float16."
+        )
+    return aliases[normalized]
+
+
+def load_fused_kernel(
+    head_dim: int = 64,
+    tile_size: Optional[int] = None,
+    kernel_dtype: Optional[str] = None,
+):
     """
     JIT-compile the CUDA extension and return the loaded module.
 
@@ -62,7 +85,8 @@ def load_fused_kernel(head_dim: int = 64, tile_size: Optional[int] = None):
     global _kernel_cache
     if tile_size is None:
         tile_size = _default_tile_size()
-    cache_key = (int(head_dim), int(tile_size))
+    normalized_dtype = _normalize_kernel_dtype(kernel_dtype)
+    cache_key = (int(head_dim), int(tile_size), normalized_dtype)
     if cache_key in _kernel_cache:
         return _kernel_cache[cache_key]
 
@@ -72,7 +96,8 @@ def load_fused_kernel(head_dim: int = 64, tile_size: Optional[int] = None):
     cu_file = os.path.join(root, "kernel", "fused_attn.cu")
     cpp_file = os.path.join(root, "kernel", "fused_attn_ext.cpp")
     build_dir = os.path.join(root, "build")
-    module_name = f"fused_linear_attention_hd{head_dim}_tile{tile_size}"
+    dtype_tag = "f16" if normalized_dtype == "float16" else "f32"
+    module_name = f"fused_linear_attention_hd{head_dim}_tile{tile_size}_{dtype_tag}"
 
     for path in (cu_file, cpp_file):
         if not os.path.exists(path):

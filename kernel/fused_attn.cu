@@ -7,6 +7,7 @@
  */
 
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 #include <float.h>
 #include <math.h>
 
@@ -24,12 +25,39 @@
 #define X_TILE_OFFSET(row, col) ((row) * PROJ_K_TILE + (col))
 #define W_TILE_OFFSET(row, col) ((row) * HEAD_DIM + (col))
 
+template <typename scalar_t>
+__device__ inline float scalar_to_float(scalar_t value);
+
+template <>
+__device__ inline float scalar_to_float<float>(float value) {
+    return value;
+}
+
+template <>
+__device__ inline float scalar_to_float<__half>(__half value) {
+    return __half2float(value);
+}
+
+template <typename scalar_t>
+__device__ inline scalar_t scalar_zero();
+
+template <>
+__device__ inline float scalar_zero<float>() {
+    return 0.0f;
+}
+
+template <>
+__device__ inline __half scalar_zero<__half>() {
+    return __float2half(0.0f);
+}
+
+template <typename scalar_t>
 __launch_bounds__(TILE_SIZE, 2)
 __global__ void fused_qkv_attention_kernel(
-    const float* __restrict__ X,
-    const float* __restrict__ Wq,
-    const float* __restrict__ Wk,
-    const float* __restrict__ Wv,
+    const scalar_t* __restrict__ X,
+    const scalar_t* __restrict__ Wq,
+    const scalar_t* __restrict__ Wk,
+    const scalar_t* __restrict__ Wv,
     float* __restrict__ Out,
     int B, int H, int N, int D, int d_head
 ) {
@@ -41,16 +69,16 @@ __global__ void fused_qkv_attention_kernel(
     const float scale = rsqrtf(static_cast<float>(d_head));
     const int head_col_start = h * d_head;
 
-    const float* x_b = X + static_cast<long long>(b) * N * D;
+    const scalar_t* x_b = X + static_cast<long long>(b) * N * D;
     float* out_bh = Out + (static_cast<long long>(b) * H + h) * N * d_head;
 
-    extern __shared__ float shared_mem[];
-    float* sQ = shared_mem;
+    extern __shared__ unsigned char shared_mem[];
+    float* sQ = reinterpret_cast<float*>(shared_mem);
     float* sK = sQ + TILE_SIZE * SHMEM_STRIDE;
     float* sV = sK + TILE_SIZE * SHMEM_STRIDE;
-    float* sX = sV + TILE_SIZE * SHMEM_STRIDE;
-    float* sW0 = sX + TILE_SIZE * PROJ_K_TILE;
-    float* sW1 = sW0 + PROJ_K_TILE * HEAD_DIM;
+    scalar_t* sX = reinterpret_cast<scalar_t*>(sV + TILE_SIZE * SHMEM_STRIDE);
+    scalar_t* sW0 = sX + TILE_SIZE * PROJ_K_TILE;
+    scalar_t* sW1 = sW0 + PROJ_K_TILE * HEAD_DIM;
 
     const int q_global = tile_q * TILE_SIZE + tid;
 
@@ -75,7 +103,7 @@ __global__ void fused_qkv_attention_kernel(
             const int gk = k_base + kk;
             sX[X_TILE_OFFSET(tid, kk)] = (q_global < N && gk < D)
                 ? x_b[static_cast<long long>(q_global) * D + gk]
-                : 0.0f;
+                : scalar_zero<scalar_t>();
         }
 
         for (int idx = tid; idx < PROJ_K_TILE * HEAD_DIM; idx += TILE_SIZE) {
@@ -84,17 +112,17 @@ __global__ void fused_qkv_attention_kernel(
             const int gk = k_base + kk;
             sW0[W_TILE_OFFSET(kk, c)] = (gk < D)
                 ? Wq[static_cast<long long>(gk) * H * d_head + head_col_start + c]
-                : 0.0f;
+                : scalar_zero<scalar_t>();
         }
 
         __syncthreads();
 
         #pragma unroll
         for (int kk = 0; kk < PROJ_K_TILE; ++kk) {
-            const float xval = sX[X_TILE_OFFSET(tid, kk)];
+            const float xval = scalar_to_float(sX[X_TILE_OFFSET(tid, kk)]);
             #pragma unroll
             for (int c = 0; c < HEAD_DIM; ++c) {
-                sQ[TILE_OFFSET(tid, c)] += xval * sW0[W_TILE_OFFSET(kk, c)];
+                sQ[TILE_OFFSET(tid, c)] += xval * scalar_to_float(sW0[W_TILE_OFFSET(kk, c)]);
             }
         }
 
@@ -118,7 +146,7 @@ __global__ void fused_qkv_attention_kernel(
                 const int gk = k_base + kk;
                 sX[X_TILE_OFFSET(tid, kk)] = (kv_global < N && gk < D)
                     ? x_b[static_cast<long long>(kv_global) * D + gk]
-                    : 0.0f;
+                    : scalar_zero<scalar_t>();
             }
 
             for (int idx = tid; idx < PROJ_K_TILE * HEAD_DIM; idx += TILE_SIZE) {
@@ -127,21 +155,21 @@ __global__ void fused_qkv_attention_kernel(
                 const int gk = k_base + kk;
                 sW0[W_TILE_OFFSET(kk, c)] = (gk < D)
                     ? Wk[static_cast<long long>(gk) * H * d_head + head_col_start + c]
-                    : 0.0f;
+                    : scalar_zero<scalar_t>();
                 sW1[W_TILE_OFFSET(kk, c)] = (gk < D)
                     ? Wv[static_cast<long long>(gk) * H * d_head + head_col_start + c]
-                    : 0.0f;
+                    : scalar_zero<scalar_t>();
             }
 
             __syncthreads();
 
             #pragma unroll
             for (int kk = 0; kk < PROJ_K_TILE; ++kk) {
-                const float xval = sX[X_TILE_OFFSET(tid, kk)];
+                const float xval = scalar_to_float(sX[X_TILE_OFFSET(tid, kk)]);
                 #pragma unroll
                 for (int c = 0; c < HEAD_DIM; ++c) {
-                    sK[TILE_OFFSET(tid, c)] += xval * sW0[W_TILE_OFFSET(kk, c)];
-                    sV[TILE_OFFSET(tid, c)] += xval * sW1[W_TILE_OFFSET(kk, c)];
+                    sK[TILE_OFFSET(tid, c)] += xval * scalar_to_float(sW0[W_TILE_OFFSET(kk, c)]);
+                    sV[TILE_OFFSET(tid, c)] += xval * scalar_to_float(sW1[W_TILE_OFFSET(kk, c)]);
                 }
             }
 
@@ -207,11 +235,12 @@ __global__ void fused_qkv_attention_kernel(
     }
 }
 
-extern "C" void launch_fused_attention(
-    const float* X,
-    const float* Wq,
-    const float* Wk,
-    const float* Wv,
+template <typename scalar_t>
+void launch_fused_attention_impl(
+    const scalar_t* X,
+    const scalar_t* Wq,
+    const scalar_t* Wk,
+    const scalar_t* Wv,
     float* Out,
     int B, int H, int N, int D, int d_head,
     cudaStream_t stream
@@ -222,22 +251,72 @@ extern "C" void launch_fused_attention(
     const size_t shmem_bytes =
         (
             3 * TILE_SIZE * SHMEM_STRIDE
-            + TILE_SIZE * PROJ_K_TILE
+        ) * sizeof(float)
+        + (
+            TILE_SIZE * PROJ_K_TILE
             + 2 * PROJ_K_TILE * HEAD_DIM
-        ) * sizeof(float);
+        ) * sizeof(scalar_t);
 
     cudaFuncSetAttribute(
-        fused_qkv_attention_kernel,
+        fused_qkv_attention_kernel<scalar_t>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         static_cast<int>(shmem_bytes)
     );
     cudaFuncSetAttribute(
-        fused_qkv_attention_kernel,
+        fused_qkv_attention_kernel<scalar_t>,
         cudaFuncAttributePreferredSharedMemoryCarveout,
         100
     );
 
-    fused_qkv_attention_kernel<<<grid, block, shmem_bytes, stream>>>(
+    fused_qkv_attention_kernel<scalar_t><<<grid, block, shmem_bytes, stream>>>(
         X, Wq, Wk, Wv, Out, B, H, N, D, d_head
+    );
+}
+
+extern "C" void launch_fused_attention_fp32(
+    const void* X,
+    const void* Wq,
+    const void* Wk,
+    const void* Wv,
+    void* Out,
+    int B, int H, int N, int D, int d_head,
+    cudaStream_t stream
+) {
+    launch_fused_attention_impl(
+        static_cast<const float*>(X),
+        static_cast<const float*>(Wq),
+        static_cast<const float*>(Wk),
+        static_cast<const float*>(Wv),
+        static_cast<float*>(Out),
+        B,
+        H,
+        N,
+        D,
+        d_head,
+        stream
+    );
+}
+
+extern "C" void launch_fused_attention_fp16(
+    const void* X,
+    const void* Wq,
+    const void* Wk,
+    const void* Wv,
+    void* Out,
+    int B, int H, int N, int D, int d_head,
+    cudaStream_t stream
+) {
+    launch_fused_attention_impl(
+        static_cast<const __half*>(X),
+        static_cast<const __half*>(Wq),
+        static_cast<const __half*>(Wk),
+        static_cast<const __half*>(Wv),
+        static_cast<float*>(Out),
+        B,
+        H,
+        N,
+        D,
+        d_head,
+        stream
     );
 }

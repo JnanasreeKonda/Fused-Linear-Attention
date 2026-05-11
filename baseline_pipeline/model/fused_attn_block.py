@@ -23,6 +23,11 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 DEFAULT_TILE_SIZE = int(os.environ.get("FLA_TILE_SIZE", "64"))
+DEFAULT_KERNEL_DTYPE = os.environ.get("FLA_KERNEL_DTYPE", "float32").lower()
+
+
+def _kernel_uses_low_precision() -> bool:
+    return DEFAULT_KERNEL_DTYPE in {"float16", "fp16", "f16", "half"}
 
 
 def _reference_attention_forward(
@@ -148,6 +153,7 @@ class FusedLinearAttentionBlock(nn.Module):
                 self._kernel = load_fused_kernel(
                     head_dim=self.d_head,
                     tile_size=DEFAULT_TILE_SIZE,
+                    kernel_dtype=DEFAULT_KERNEL_DTYPE,
                 )
             except Exception as exc:
                 raise RuntimeError(
@@ -179,6 +185,8 @@ class FusedLinearAttentionBlock(nn.Module):
             return True
         if x.dtype != torch.float32:
             return True
+        if self.training and _kernel_uses_low_precision():
+            return True
         if self.training and self.dropout > 0:
             return True
         return False
@@ -192,6 +200,8 @@ class FusedLinearAttentionBlock(nn.Module):
             reasons.append("non-CUDA device")
         if x.dtype != torch.float32:
             reasons.append(f"unsupported dtype={x.dtype}")
+        if self.training and _kernel_uses_low_precision():
+            reasons.append("training with low-precision fused kernel")
         if self.training and self.dropout > 0:
             reasons.append("training-time attention dropout")
 
@@ -203,11 +213,13 @@ class FusedLinearAttentionBlock(nn.Module):
         self._warned_reference_fallback = True
 
     def _fused_attention(self, x: torch.Tensor) -> torch.Tensor:
-        q_w = self.q_proj.weight.t().contiguous()
-        k_w = self.k_proj.weight.t().contiguous()
-        v_w = self.v_proj.weight.t().contiguous()
+        kernel_dtype = torch.float16 if _kernel_uses_low_precision() else torch.float32
+        x_kernel = x.contiguous().to(kernel_dtype)
+        q_w = self.q_proj.weight.t().contiguous().to(kernel_dtype)
+        k_w = self.k_proj.weight.t().contiguous().to(kernel_dtype)
+        v_w = self.v_proj.weight.t().contiguous().to(kernel_dtype)
         out = _FusedAttentionAutogradFn.apply(
-            x,
+            x_kernel,
             q_w,
             k_w,
             v_w,

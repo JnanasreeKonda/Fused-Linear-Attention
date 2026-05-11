@@ -9,12 +9,22 @@
 
 namespace py = pybind11;
 
-extern "C" void launch_fused_attention(
-    const float* X,
-    const float* Wq,
-    const float* Wk,
-    const float* Wv,
-    float* Out,
+extern "C" void launch_fused_attention_fp32(
+    const void* X,
+    const void* Wq,
+    const void* Wk,
+    const void* Wv,
+    void* Out,
+    int B, int H, int N, int D, int d_head,
+    cudaStream_t stream
+);
+
+extern "C" void launch_fused_attention_fp16(
+    const void* X,
+    const void* Wq,
+    const void* Wk,
+    const void* Wv,
+    void* Out,
     int B, int H, int N, int D, int d_head,
     cudaStream_t stream
 );
@@ -35,10 +45,14 @@ torch::Tensor fused_attention_forward(
     TORCH_CHECK(Wk.device().is_cuda(), "Wk must be a CUDA tensor");
     TORCH_CHECK(Wv.device().is_cuda(), "Wv must be a CUDA tensor");
 
-    TORCH_CHECK(X.dtype() == torch::kFloat32, "X must be float32");
-    TORCH_CHECK(Wq.dtype() == torch::kFloat32, "Wq must be float32");
-    TORCH_CHECK(Wk.dtype() == torch::kFloat32, "Wk must be float32");
-    TORCH_CHECK(Wv.dtype() == torch::kFloat32, "Wv must be float32");
+    const auto dtype = X.scalar_type();
+    TORCH_CHECK(
+        dtype == torch::kFloat32 || dtype == torch::kFloat16,
+        "X must be float32 or float16"
+    );
+    TORCH_CHECK(Wq.scalar_type() == dtype, "Wq must match X dtype");
+    TORCH_CHECK(Wk.scalar_type() == dtype, "Wk must match X dtype");
+    TORCH_CHECK(Wv.scalar_type() == dtype, "Wv must match X dtype");
 
     TORCH_CHECK(X.is_contiguous(), "X must be contiguous");
     TORCH_CHECK(Wq.is_contiguous(), "Wq must be contiguous");
@@ -61,19 +75,35 @@ torch::Tensor fused_attention_forward(
     );
 
     cudaStream_t stream = c10::cuda::getDefaultCUDAStream();
-    launch_fused_attention(
-        X.data_ptr<float>(),
-        Wq.data_ptr<float>(),
-        Wk.data_ptr<float>(),
-        Wv.data_ptr<float>(),
-        out.data_ptr<float>(),
-        static_cast<int>(B),
-        static_cast<int>(H),
-        static_cast<int>(N),
-        static_cast<int>(D),
-        static_cast<int>(d_head),
-        stream
-    );
+    if (dtype == torch::kFloat32) {
+        launch_fused_attention_fp32(
+            X.data_ptr(),
+            Wq.data_ptr(),
+            Wk.data_ptr(),
+            Wv.data_ptr(),
+            out.data_ptr(),
+            static_cast<int>(B),
+            static_cast<int>(H),
+            static_cast<int>(N),
+            static_cast<int>(D),
+            static_cast<int>(d_head),
+            stream
+        );
+    } else {
+        launch_fused_attention_fp16(
+            X.data_ptr(),
+            Wq.data_ptr(),
+            Wk.data_ptr(),
+            Wv.data_ptr(),
+            out.data_ptr(),
+            static_cast<int>(B),
+            static_cast<int>(H),
+            static_cast<int>(N),
+            static_cast<int>(D),
+            static_cast<int>(d_head),
+            stream
+        );
+    }
 
     return out;
 }
