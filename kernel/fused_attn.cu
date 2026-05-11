@@ -196,7 +196,7 @@ __device__ inline void accumulate_two_proj_rows<__nv_bfloat16>(
 }
 
 template <typename scalar_t>
-__launch_bounds__(TILE_SIZE, 2)
+__launch_bounds__(TILE_SIZE, 3)
 __global__ void fused_qkv_attention_kernel(
     const scalar_t* __restrict__ X,
     const scalar_t* __restrict__ Wq,
@@ -217,21 +217,25 @@ __global__ void fused_qkv_attention_kernel(
     float* out_bh = Out + (static_cast<long long>(b) * H + h) * N * d_head;
 
     extern __shared__ unsigned char shared_mem[];
-    float* sK = reinterpret_cast<float*>(shared_mem);
+    float* sQ = reinterpret_cast<float*>(shared_mem);
+    float* sK = sQ + TILE_SIZE * SHMEM_STRIDE;
     float* sV = sK + TILE_SIZE * SHMEM_STRIDE;
     scalar_t* sX = reinterpret_cast<scalar_t*>(sV + TILE_SIZE * SHMEM_STRIDE);
     scalar_t* sW0 = sX + TILE_SIZE * PROJ_K_TILE;
     scalar_t* sW1 = sW0 + PROJ_K_TILE * HEAD_DIM;
 
     const int q_global = tile_q * TILE_SIZE + tid;
-    float q_acc[HEAD_DIM];
+
+    #pragma unroll
+    for (int c = 0; c < HEAD_DIM; ++c) {
+        sQ[TILE_OFFSET(tid, c)] = 0.0f;
+    }
 
     float o_acc[HEAD_DIM];
     float m_i = -FLT_MAX;
     float l_i = 0.0f;
     #pragma unroll
     for (int c = 0; c < HEAD_DIM; ++c) {
-        q_acc[c] = 0.0f;
         o_acc[c] = 0.0f;
     }
 
@@ -256,7 +260,7 @@ __global__ void fused_qkv_attention_kernel(
         }
 
         __syncthreads();
-        accumulate_proj_row<scalar_t>(q_acc, &sX[X_TILE_OFFSET(tid, 0)], sW0);
+        accumulate_proj_row<scalar_t>(&sQ[TILE_OFFSET(tid, 0)], &sX[X_TILE_OFFSET(tid, 0)], sW0);
         __syncthreads();
     }
 
@@ -316,7 +320,7 @@ __global__ void fused_qkv_attention_kernel(
             float dot = 0.0f;
             #pragma unroll
             for (int c = 0; c < HEAD_DIM; ++c) {
-                dot += q_acc[c] * sK[TILE_OFFSET(j, c)];
+                dot += sQ[TILE_OFFSET(tid, c)] * sK[TILE_OFFSET(j, c)];
             }
             scores[j] = dot * scale;
             if (scores[j] > m_tile) {
@@ -376,7 +380,7 @@ void launch_fused_attention_impl(
     dim3 grid(B, H, n_q_tiles);
     dim3 block(TILE_SIZE);
     const size_t shmem_bytes =
-        (2 * TILE_SIZE * SHMEM_STRIDE) * sizeof(float) +
+        (3 * TILE_SIZE * SHMEM_STRIDE) * sizeof(float) +
         (TILE_SIZE * PROJ_K_TILE + 2 * PROJ_K_TILE * HEAD_DIM) * sizeof(scalar_t);
 
     cudaFuncSetAttribute(

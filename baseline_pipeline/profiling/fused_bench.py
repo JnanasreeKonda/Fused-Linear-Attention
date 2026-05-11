@@ -214,7 +214,7 @@ def build_occupancy_sweep() -> List[Dict]:
 
     rows = []
     for tile_size in tile_sizes:
-        shmem_bytes = 2 * tile_size * (d_head + 1) * 4
+        shmem_bytes = 3 * tile_size * (d_head + 1) * 4
         shmem_kb = shmem_bytes / 1024
         max_blocks = int(shmem_total_kb / shmem_kb) if shmem_kb > 0 else 0
         for seq_len in seq_lens:
