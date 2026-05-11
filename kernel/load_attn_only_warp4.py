@@ -47,10 +47,12 @@ def load_attn_only_warp4_kernel(
     head_dim: int = 64,
     tile_size: int = 64,
     kernel_dtype: Optional[str] = None,
+    q_group_size: Optional[int] = None,
 ):
     global _kernel_cache
     normalized_dtype = _normalize_kernel_dtype(kernel_dtype)
-    cache_key = (int(head_dim), int(tile_size), normalized_dtype)
+    q_group = int(q_group_size or os.environ.get("FLA_Q_GROUP_SIZE", "2"))
+    cache_key = (int(head_dim), int(tile_size), normalized_dtype, q_group)
     if cache_key in _kernel_cache:
         return _kernel_cache[cache_key]
 
@@ -68,7 +70,9 @@ def load_attn_only_warp4_kernel(
         dtype_tag = "f16"
     elif normalized_dtype == "bfloat16":
         dtype_tag = "bf16"
-    module_name = f"attn_only_warp4_hd{head_dim}_tile{tile_size}_{dtype_tag}"
+    module_name = (
+        f"attn_only_warp4_hd{head_dim}_tile{tile_size}_{dtype_tag}_qg{q_group}"
+    )
 
     _kernel_cache[cache_key] = load(
         name=module_name,
@@ -78,6 +82,7 @@ def load_attn_only_warp4_kernel(
             "--use_fast_math",
             f"-DTILE_SIZE={int(tile_size)}",
             f"-DHEAD_DIM={int(head_dim)}",
+            f"-DQ_GROUP_SIZE={q_group}",
             "-allow-unsupported-compiler",
         ],
         verbose=False,
