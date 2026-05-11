@@ -21,7 +21,8 @@
 #define HEAD_DIM 64
 #endif
 
-#define SHMEM_STRIDE (HEAD_DIM + 1)
+#define SHMEM_PAD 4
+#define SHMEM_STRIDE (HEAD_DIM + SHMEM_PAD)
 #define TILE_OFFSET(row, col) ((row) * SHMEM_STRIDE + (col))
 
 template <typename scalar_t>
@@ -40,6 +41,35 @@ __device__ inline float scalar_to_float<__half>(__half value) {
 template <>
 __device__ inline float scalar_to_float<__nv_bfloat16>(__nv_bfloat16 value) {
     return __bfloat162float(value);
+}
+
+__device__ inline float dot_shared_rows(
+    const float* __restrict__ lhs,
+    const float* __restrict__ rhs
+) {
+    float acc = 0.0f;
+    #pragma unroll
+    for (int c = 0; c < HEAD_DIM; c += 4) {
+        const float4 lv = *reinterpret_cast<const float4*>(lhs + c);
+        const float4 rv = *reinterpret_cast<const float4*>(rhs + c);
+        acc += lv.x * rv.x + lv.y * rv.y + lv.z * rv.z + lv.w * rv.w;
+    }
+    return acc;
+}
+
+__device__ inline void axpy_shared_row(
+    float* __restrict__ dst,
+    float alpha,
+    const float* __restrict__ src
+) {
+    #pragma unroll
+    for (int c = 0; c < HEAD_DIM; c += 4) {
+        const float4 sv = *reinterpret_cast<const float4*>(src + c);
+        dst[c] += alpha * sv.x;
+        dst[c + 1] += alpha * sv.y;
+        dst[c + 2] += alpha * sv.z;
+        dst[c + 3] += alpha * sv.w;
+    }
 }
 
 template <typename scalar_t>
@@ -124,12 +154,10 @@ __global__ void attn_only_kernel(
                 continue;
             }
 
-            float dot = 0.0f;
-            #pragma unroll
-            for (int c = 0; c < HEAD_DIM; ++c) {
-                dot += sQ[TILE_OFFSET(tid, c)] * sK[TILE_OFFSET(j, c)];
-            }
-            scores[j] = dot * scale;
+            scores[j] = dot_shared_rows(
+                &sQ[TILE_OFFSET(tid, 0)],
+                &sK[TILE_OFFSET(j, 0)]
+            ) * scale;
             if (scores[j] > m_tile) {
                 m_tile = scores[j];
             }
@@ -153,10 +181,7 @@ __global__ void attn_only_kernel(
 
             const float e = expf(scores[j] - m_new);
             l_tile += e;
-            #pragma unroll
-            for (int c = 0; c < HEAD_DIM; ++c) {
-                o_acc[c] += e * sV[TILE_OFFSET(j, c)];
-            }
+            axpy_shared_row(o_acc, e, &sV[TILE_OFFSET(j, 0)]);
         }
 
         m_i = m_new;
