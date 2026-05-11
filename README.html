@@ -1,0 +1,313 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>FusedLinearAttention README</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; margin: 40px auto; max-width: 900px; line-height: 1.55; color: #1f2937; padding: 0 24px; }
+h1, h2, h3, h4 { color: #111827; margin-top: 1.4em; }
+h1 { font-size: 32px; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; }
+h2 { font-size: 24px; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
+code { background: #f3f4f6; padding: 2px 5px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+pre { background: #111827; color: #f9fafb; padding: 14px; border-radius: 8px; overflow-x: auto; }
+pre code { background: transparent; color: inherit; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 18px 0; font-size: 14px; }
+th, td { border: 1px solid #d1d5db; padding: 8px 10px; text-align: left; }
+th { background: #f3f4f6; }
+a { color: #2563eb; text-decoration: none; }
+ul, ol { padding-left: 24px; }
+blockquote { border-left: 4px solid #d1d5db; margin: 16px 0; padding: 4px 16px; color: #4b5563; }
+@media print { body { margin: 0 auto; max-width: none; } a { color: inherit; } }
+</style>
+</head>
+<body>
+<h1 id="fusedlinearattention">FusedLinearAttention</h1>
+<p>FusedLinearAttention is an HPML course project on collapsing Q, K, and V
+projection plus scaled dot-product attention into a single CUDA kernel. The
+repo now contains:</p>
+<ul>
+<li>a complete ETTh1 + PatchTST baseline pipeline</li>
+<li>a canonical CUDA extension path under <code>kernel/</code></li>
+<li>correctness, profiling, validation, and figure-generation workflows</li>
+<li>final H100 experiment artifacts under
+  <a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results">baseline_pipeline/results</a></li>
+</ul>
+<p>The short version: the fused kernel is <strong>correct</strong> and it <strong>reduces estimated
+HBM traffic</strong>, but on the current implementation it is still <strong>slower than the
+PyTorch baseline</strong> on H100 because the kernel is still dominated by scalar fp32
+projection work.</p>
+<h2 id="project-goal">Project Goal</h2>
+<p>The unfused attention path does this in two stages:</p>
+<ol>
+<li>project input tokens into <code>Q</code>, <code>K</code>, and <code>V</code></li>
+<li>read those intermediates back to run attention</li>
+</ol>
+<p>The fused kernel aims to:</p>
+<ul>
+<li>reduce kernel launches</li>
+<li>reduce global-memory traffic</li>
+<li>avoid materializing full <code>Q/K/V</code> tensors in HBM</li>
+</ul>
+<h2 id="final-status">Final Status</h2>
+<h3 id="what-is-complete">What is complete</h3>
+<ul>
+<li>ETTh1 preprocessing and DataLoaders</li>
+<li>PatchTST baseline model, training, and evaluation</li>
+<li>baseline profiling workflow</li>
+<li>canonical NumPy / PyTorch correctness oracle</li>
+<li>canonical CUDA kernel source and PyTorch extension binding</li>
+<li>fused profiling pipeline</li>
+<li>Phase 3 end-to-end validation pipeline</li>
+<li>H100 compiled-kernel correctness run</li>
+<li>H100 fused-vs-baseline profiling run</li>
+</ul>
+<h3 id="what-is-still-not-ideal">What is still not ideal</h3>
+<ul>
+<li>the fused kernel does <strong>not</strong> beat the unfused PyTorch baseline on H100</li>
+<li>end-to-end fused model quality is worse than baseline</li>
+<li>backward is still a custom autograd bridge, not a handwritten fused CUDA
+  backward kernel</li>
+</ul>
+<h2 id="repository-layout">Repository Layout</h2>
+<h3 id="baseline_pipeline"><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline">baseline_pipeline/</a></h3>
+<ul>
+<li>ETTh1 preprocessing</li>
+<li>PatchTST baseline</li>
+<li>baseline and fused profiling scripts</li>
+<li>Phase 3 end-to-end validation</li>
+<li>result merge and figure generation</li>
+</ul>
+<h3 id="kernel"><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/kernel">kernel/</a></h3>
+<ul>
+<li><code>fused_attn.cu</code></li>
+<li><code>fused_attn_ext.cpp</code></li>
+<li><code>load_kernel.py</code></li>
+<li>kernel design notes</li>
+</ul>
+<h3 id="tests"><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/tests">tests/</a></h3>
+<ul>
+<li>correctness checks</li>
+<li>reference comparisons</li>
+<li>fused backward smoke test</li>
+</ul>
+<h3 id="cpu_reference_in_numpy"><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/CPU_Reference_in_NumPy">CPU_Reference_in_NumPy/</a></h3>
+<ul>
+<li>original NumPy oracle</li>
+<li>golden outputs</li>
+<li>reference comparison utilities</li>
+</ul>
+<h2 id="final-h100-results">Final H100 Results</h2>
+<p>Source files:</p>
+<ul>
+<li><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/comparison_table.csv">comparison_table.csv</a></li>
+<li><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/validation_table.csv">validation_table.csv</a></li>
+<li><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/endtoend_timing.csv">endtoend_timing.csv</a></li>
+<li><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/correctness_results.csv">correctness_results.csv</a></li>
+</ul>
+<h3 id="forward-microbenchmark">Forward microbenchmark</h3>
+<table>
+<thead>
+<tr>
+<th>Seq Len</th>
+<th style="text-align: right;">Baseline (<code>us</code>)</th>
+<th style="text-align: right;">Fused (<code>us</code>)</th>
+<th style="text-align: right;">Fused vs Baseline</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>64</td>
+<td style="text-align: right;">109.7448</td>
+<td style="text-align: right;">872.0335</td>
+<td style="text-align: right;">0.1258x</td>
+</tr>
+<tr>
+<td>128</td>
+<td style="text-align: right;">109.1533</td>
+<td style="text-align: right;">1422.1433</td>
+<td style="text-align: right;">0.0768x</td>
+</tr>
+<tr>
+<td>256</td>
+<td style="text-align: right;">108.9229</td>
+<td style="text-align: right;">2532.7407</td>
+<td style="text-align: right;">0.0430x</td>
+</tr>
+<tr>
+<td>512</td>
+<td style="text-align: right;">118.5030</td>
+<td style="text-align: right;">4737.3379</td>
+<td style="text-align: right;">0.0250x</td>
+</tr>
+<tr>
+<td>1024</td>
+<td style="text-align: right;">198.5365</td>
+<td style="text-align: right;">9124.8203</td>
+<td style="text-align: right;">0.0218x</td>
+</tr>
+</tbody>
+</table>
+<h3 id="forecast-metrics">Forecast metrics</h3>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th style="text-align: right;">MSE</th>
+<th style="text-align: right;">MAE</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Baseline</td>
+<td style="text-align: right;">180.46336365</td>
+<td style="text-align: right;">12.64666843</td>
+</tr>
+<tr>
+<td>Fused</td>
+<td style="text-align: right;">213.44288635</td>
+<td style="text-align: right;">13.50915241</td>
+</tr>
+</tbody>
+</table>
+<p>Delta vs baseline:</p>
+<ul>
+<li>MSE: <code>+18.274913%</code></li>
+<li>MAE: <code>+6.81985129%</code></li>
+</ul>
+<h3 id="end-to-end-timing">End-to-end timing</h3>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th style="text-align: right;">Mean Epoch Time (<code>s</code>)</th>
+<th style="text-align: right;">Forward / iter (<code>ms</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Baseline</td>
+<td style="text-align: right;">1.8825</td>
+<td style="text-align: right;">0.544459</td>
+</tr>
+<tr>
+<td>Fused</td>
+<td style="text-align: right;">2.5510</td>
+<td style="text-align: right;">0.633303</td>
+</tr>
+</tbody>
+</table>
+<h2 id="generated-figures">Generated Figures</h2>
+<p>The main charts are already in
+<a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures">baseline_pipeline/results/figures</a>:</p>
+<ul>
+<li><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/speedup.png">speedup.png</a></li>
+<li><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/wall_time_speedup.png">wall_time_speedup.png</a></li>
+<li><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/hbm_bandwidth.png">hbm_bandwidth.png</a></li>
+<li><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/kernel_count.png">kernel_count.png</a></li>
+<li><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/occupancy_vs_tile.png">occupancy_vs_tile.png</a></li>
+<li><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/occupancy_vs_tile_tradeoff.png">occupancy_vs_tile_tradeoff.png</a></li>
+<li><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/nsight_timeline_comparison.png">nsight_timeline_comparison.png</a></li>
+</ul>
+<p>There is also a detailed written report here:</p>
+<ul>
+<li><a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/final_report.md">baseline_pipeline/final_report.md</a></li>
+</ul>
+<h2 id="how-to-run">How To Run</h2>
+<h3 id="1-baseline-pipeline">1. Baseline pipeline</h3>
+<pre><code class="language-bash">cd baseline_pipeline
+python model/data.py
+python profiling/baseline_bench.py
+python model/train.py
+python model/evaluate.py
+</code></pre>
+<h3 id="2-correctness">2. Correctness</h3>
+<p>Quick CUDA check:</p>
+<pre><code class="language-bash">python tests/test_correctness.py --quick
+</code></pre>
+<p>Full CUDA check:</p>
+<pre><code class="language-bash">python tests/test_correctness.py
+</code></pre>
+<p>Simulation/reference mode:</p>
+<pre><code class="language-bash">python tests/test_correctness.py --simulate --quick --use-root-oracle
+python tests/test_fused_backward.py
+</code></pre>
+<h3 id="3-fused-profiling">3. Fused profiling</h3>
+<pre><code class="language-bash">cd baseline_pipeline
+./run_bhanuja.sh
+</code></pre>
+<h3 id="4-phase-3-validation">4. Phase 3 validation</h3>
+<pre><code class="language-bash">cd baseline_pipeline
+./run_phase3.sh --train-fused
+</code></pre>
+<h3 id="5-full-helper">5. Full helper</h3>
+<pre><code class="language-bash">./run_all.sh
+</code></pre>
+<h2 id="environment-notes">Environment Notes</h2>
+<p>For compiled-kernel runs you need:</p>
+<ul>
+<li>CUDA toolkit with <code>nvcc</code></li>
+<li>a CUDA-compatible PyTorch build</li>
+<li><code>ninja</code></li>
+<li>a GPU where <code>torch.cuda.is_available()</code> is true</li>
+</ul>
+<p>The H100 run used:</p>
+<ul>
+<li>host CUDA toolkit</li>
+<li>H100 GPU</li>
+<li><code>TORCH_CUDA_ARCH_LIST=9.0</code></li>
+<li>compiled extension path via <a href="/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/kernel/load_kernel.py">kernel/load_kernel.py</a></li>
+</ul>
+<h2 id="why-the-fused-kernel-is-still-slower">Why The Fused Kernel Is Still Slower</h2>
+<p>Even after the successful optimizations, the current fused kernel still loses to
+the PyTorch baseline because:</p>
+<ul>
+<li>Q/K/V projection is still implemented as scalar fp32 loops inside the kernel</li>
+<li>the baseline uses highly optimized library kernels</li>
+<li>reduced HBM traffic is being outweighed by compute inefficiency</li>
+</ul>
+<p>The kernel is therefore:</p>
+<ul>
+<li><strong>correct</strong></li>
+<li><strong>more memory-efficient on paper</strong></li>
+<li><strong>not yet compute-efficient enough to win on H100</strong></li>
+</ul>
+<h2 id="best-current-optimization-state">Best Current Optimization State</h2>
+<p>The best version in the repo right now includes:</p>
+<ul>
+<li>block-per-query-tile launch structure</li>
+<li>dynamic shared memory</li>
+<li>projection tiling through shared memory</li>
+<li>architecture-aware compilation</li>
+<li>a small launch-bounds hint</li>
+</ul>
+<p>That version is much faster than the older fused kernel revisions that were
+committed earlier in the branch, even though it still trails the baseline.</p>
+<h2 id="recommended-next-work">Recommended Next Work</h2>
+<p>If this project is extended further, the highest-return next steps are:</p>
+<ol>
+<li>replace scalar projection loops with tensor-core-friendly MMA tiling</li>
+<li>move toward fp16/bf16 compute paths</li>
+<li>redesign work partitioning at the warp level for projection and score
+   accumulation</li>
+<li>implement a true fused CUDA backward kernel</li>
+</ol>
+<h2 id="team-contributions">Team Contributions</h2>
+<h3 id="jnanasree-konda">Jnanasree Konda</h3>
+<ul>
+<li>fused-attention NumPy oracle and correctness work</li>
+<li>PyTorch extension interface</li>
+<li>kernel validation and GPU experiment integration</li>
+</ul>
+<h3 id="bhanuja-karumuru">Bhanuja Karumuru</h3>
+<ul>
+<li>fused kernel design and CUDA implementation</li>
+<li>profiling pipeline, result merge, and figure generation</li>
+</ul>
+<h3 id="rithwik-amajala">Rithwik Amajala</h3>
+<ul>
+<li>ETTh1 pipeline</li>
+<li>PatchTST baseline, training, and evaluation</li>
+<li>Phase 3 model-side integration and validation workflow</li>
+</ul>
+</body>
+</html>

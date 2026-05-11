@@ -23,6 +23,12 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 DEFAULT_TILE_SIZE = int(os.environ.get("FLA_TILE_SIZE", "64"))
+DEFAULT_KERNEL_DTYPE = os.environ.get("FLA_KERNEL_DTYPE", "float32").lower()
+DEFAULT_ATTN_BACKEND = os.environ.get("FLA_ATTN_BACKEND", "fused").lower()
+
+
+def _kernel_uses_low_precision() -> bool:
+    return DEFAULT_KERNEL_DTYPE in {"float16", "fp16", "f16", "half", "bfloat16", "bf16"}
 
 
 def _reference_attention_forward(
@@ -114,6 +120,58 @@ class _FusedAttentionAutogradFn(torch.autograd.Function):
         return grads[0], grads[1], grads[2], grads[3], None, None, None
 
 
+class _HybridAttentionAutogradFn(torch.autograd.Function):
+    """
+    Hybrid path:
+      - projections use PyTorch matmul
+      - custom CUDA kernel computes only the attention stage
+      - backward recomputes the full reference attention graph
+    """
+
+    @staticmethod
+    def forward(ctx, x, q_w, k_w, v_w, n_heads, d_head, kernel):
+        B, S, D = x.shape
+        q = (x @ q_w).view(B, S, n_heads, d_head).transpose(1, 2).contiguous()
+        k = (x @ k_w).view(B, S, n_heads, d_head).transpose(1, 2).contiguous()
+        v = (x @ v_w).view(B, S, n_heads, d_head).transpose(1, 2).contiguous()
+        out = kernel.forward(q, k, v, B, n_heads, S, d_head)
+        ctx.save_for_backward(x, q_w, k_w, v_w)
+        ctx.n_heads = int(n_heads)
+        ctx.d_head = int(d_head)
+        return out.transpose(1, 2).contiguous().view(B, S, D)
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        x, q_w, k_w, v_w = ctx.saved_tensors
+        needs = ctx.needs_input_grad[:4]
+
+        with torch.enable_grad():
+            x_ref = x.detach().requires_grad_(needs[0])
+            q_w_ref = q_w.detach().requires_grad_(needs[1])
+            k_w_ref = k_w.detach().requires_grad_(needs[2])
+            v_w_ref = v_w.detach().requires_grad_(needs[3])
+
+            out_ref = _reference_attention_forward(
+                x_ref,
+                q_w_ref,
+                k_w_ref,
+                v_w_ref,
+                n_heads=ctx.n_heads,
+                d_head=ctx.d_head,
+                dropout_p=0.0,
+                training=False,
+            )
+
+            grads = torch.autograd.grad(
+                outputs=out_ref,
+                inputs=(x_ref, q_w_ref, k_w_ref, v_w_ref),
+                grad_outputs=grad_out,
+                allow_unused=True,
+            )
+
+        return grads[0], grads[1], grads[2], grads[3], None, None, None
+
+
 class FusedLinearAttentionBlock(nn.Module):
     """
     Drop-in replacement for StandardAttentionBlock using the custom CUDA kernel.
@@ -143,12 +201,31 @@ class FusedLinearAttentionBlock(nn.Module):
     def _load_kernel(self):
         if self._kernel is None:
             try:
-                from kernel.load_kernel import load_fused_kernel
+                if DEFAULT_ATTN_BACKEND in {"hybrid", "hybrid_warp4"}:
+                    if DEFAULT_ATTN_BACKEND == "hybrid_warp4":
+                        from kernel.load_attn_only_warp4 import load_attn_only_warp4_kernel
 
-                self._kernel = load_fused_kernel(
-                    head_dim=self.d_head,
-                    tile_size=DEFAULT_TILE_SIZE,
-                )
+                        self._kernel = load_attn_only_warp4_kernel(
+                            head_dim=self.d_head,
+                            tile_size=DEFAULT_TILE_SIZE,
+                            kernel_dtype=DEFAULT_KERNEL_DTYPE,
+                        )
+                    else:
+                        from kernel.load_attn_only import load_attn_only_kernel
+
+                        self._kernel = load_attn_only_kernel(
+                            head_dim=self.d_head,
+                            tile_size=DEFAULT_TILE_SIZE,
+                            kernel_dtype=DEFAULT_KERNEL_DTYPE,
+                        )
+                else:
+                    from kernel.load_kernel import load_fused_kernel
+
+                    self._kernel = load_fused_kernel(
+                        head_dim=self.d_head,
+                        tile_size=DEFAULT_TILE_SIZE,
+                        kernel_dtype=DEFAULT_KERNEL_DTYPE,
+                    )
             except Exception as exc:
                 raise RuntimeError(
                     "FusedLinearAttentionBlock: kernel unavailable.\n"
@@ -179,6 +256,8 @@ class FusedLinearAttentionBlock(nn.Module):
             return True
         if x.dtype != torch.float32:
             return True
+        if self.training and _kernel_uses_low_precision():
+            return True
         if self.training and self.dropout > 0:
             return True
         return False
@@ -192,6 +271,8 @@ class FusedLinearAttentionBlock(nn.Module):
             reasons.append("non-CUDA device")
         if x.dtype != torch.float32:
             reasons.append(f"unsupported dtype={x.dtype}")
+        if self.training and _kernel_uses_low_precision():
+            reasons.append("training with low-precision fused kernel")
         if self.training and self.dropout > 0:
             reasons.append("training-time attention dropout")
 
@@ -203,18 +284,36 @@ class FusedLinearAttentionBlock(nn.Module):
         self._warned_reference_fallback = True
 
     def _fused_attention(self, x: torch.Tensor) -> torch.Tensor:
-        q_w = self.q_proj.weight.t().contiguous()
-        k_w = self.k_proj.weight.t().contiguous()
-        v_w = self.v_proj.weight.t().contiguous()
-        out = _FusedAttentionAutogradFn.apply(
-            x,
-            q_w,
-            k_w,
-            v_w,
-            self.n_heads,
-            self.d_head,
-            self._kernel,
-        )
+        if DEFAULT_KERNEL_DTYPE in {"bfloat16", "bf16"}:
+            kernel_dtype = torch.bfloat16
+        elif _kernel_uses_low_precision():
+            kernel_dtype = torch.float16
+        else:
+            kernel_dtype = torch.float32
+        x_kernel = x.contiguous().to(kernel_dtype)
+        q_w = self.q_proj.weight.t().contiguous().to(kernel_dtype)
+        k_w = self.k_proj.weight.t().contiguous().to(kernel_dtype)
+        v_w = self.v_proj.weight.t().contiguous().to(kernel_dtype)
+        if DEFAULT_ATTN_BACKEND in {"hybrid", "hybrid_warp4"}:
+            out = _HybridAttentionAutogradFn.apply(
+                x_kernel,
+                q_w,
+                k_w,
+                v_w,
+                self.n_heads,
+                self.d_head,
+                self._kernel,
+            )
+        else:
+            out = _FusedAttentionAutogradFn.apply(
+                x_kernel,
+                q_w,
+                k_w,
+                v_w,
+                self.n_heads,
+                self.d_head,
+                self._kernel,
+            )
         return self.out_proj(out)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
