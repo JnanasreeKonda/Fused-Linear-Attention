@@ -10,6 +10,7 @@
 
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cuda_bf16.h>
 #include <mma.h>
 
 using namespace nvcuda;
@@ -52,6 +53,38 @@ __global__ void wmma_projection_kernel_fp16(
     wmma::store_matrix_sync(out_ptr, acc_frag, N, wmma::mem_row_major);
 }
 
+__global__ void wmma_projection_kernel_bf16(
+    const __nv_bfloat16* __restrict__ X,
+    const __nv_bfloat16* __restrict__ W,
+    float* __restrict__ Out,
+    int M,
+    int K,
+    int N
+) {
+    const int row_tile = blockIdx.x;
+    const int col_tile = blockIdx.y;
+
+    const int row_start = row_tile * WMMA_M;
+    const int col_start = col_tile * WMMA_N;
+
+    wmma::fragment<wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, wmma::row_major> a_frag;
+    wmma::fragment<wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, wmma::row_major> b_frag;
+    wmma::fragment<wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, float> acc_frag;
+
+    wmma::fill_fragment(acc_frag, 0.0f);
+
+    for (int k_start = 0; k_start < K; k_start += WMMA_K) {
+        const __nv_bfloat16* a_ptr = X + static_cast<long long>(row_start) * K + k_start;
+        const __nv_bfloat16* b_ptr = W + static_cast<long long>(k_start) * N + col_start;
+        wmma::load_matrix_sync(a_frag, a_ptr, K);
+        wmma::load_matrix_sync(b_frag, b_ptr, N);
+        wmma::mma_sync(acc_frag, a_frag, b_frag, acc_frag);
+    }
+
+    float* out_ptr = Out + static_cast<long long>(row_start) * N + col_start;
+    wmma::store_matrix_sync(out_ptr, acc_frag, N, wmma::mem_row_major);
+}
+
 }  // namespace
 
 extern "C" void launch_wmma_projection_fp16(
@@ -68,6 +101,27 @@ extern "C" void launch_wmma_projection_fp16(
     wmma_projection_kernel_fp16<<<grid, block, 0, stream>>>(
         static_cast<const half*>(X),
         static_cast<const half*>(W),
+        static_cast<float*>(Out),
+        M,
+        K,
+        N
+    );
+}
+
+extern "C" void launch_wmma_projection_bf16(
+    const void* X,
+    const void* W,
+    void* Out,
+    int M,
+    int K,
+    int N,
+    cudaStream_t stream
+) {
+    dim3 grid(M / WMMA_M, N / WMMA_N);
+    dim3 block(32);
+    wmma_projection_kernel_bf16<<<grid, block, 0, stream>>>(
+        static_cast<const __nv_bfloat16*>(X),
+        static_cast<const __nv_bfloat16*>(W),
         static_cast<float*>(Out),
         M,
         K,

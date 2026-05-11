@@ -18,14 +18,27 @@ extern "C" void launch_wmma_projection_fp16(
     cudaStream_t stream
 );
 
+extern "C" void launch_wmma_projection_bf16(
+    const void* X,
+    const void* W,
+    void* Out,
+    int M,
+    int K,
+    int N,
+    cudaStream_t stream
+);
+
 torch::Tensor wmma_projection_forward(
     torch::Tensor X,
     torch::Tensor W
 ) {
     TORCH_CHECK(X.device().is_cuda(), "X must be CUDA");
     TORCH_CHECK(W.device().is_cuda(), "W must be CUDA");
-    TORCH_CHECK(X.scalar_type() == torch::kFloat16, "X must be float16");
-    TORCH_CHECK(W.scalar_type() == torch::kFloat16, "W must be float16");
+    TORCH_CHECK(
+        X.scalar_type() == torch::kFloat16 || X.scalar_type() == torch::kBFloat16,
+        "X must be float16 or bfloat16"
+    );
+    TORCH_CHECK(W.scalar_type() == X.scalar_type(), "W must match X dtype");
     TORCH_CHECK(X.is_contiguous(), "X must be contiguous");
     TORCH_CHECK(W.is_contiguous(), "W must be contiguous");
     TORCH_CHECK(X.dim() == 2, "X must be 2-D [M, K]");
@@ -45,15 +58,27 @@ torch::Tensor wmma_projection_forward(
     );
 
     cudaStream_t stream = c10::cuda::getDefaultCUDAStream();
-    launch_wmma_projection_fp16(
-        X.data_ptr(),
-        W.data_ptr(),
-        out.data_ptr(),
-        M,
-        K,
-        N,
-        stream
-    );
+    if (X.scalar_type() == torch::kFloat16) {
+        launch_wmma_projection_fp16(
+            X.data_ptr(),
+            W.data_ptr(),
+            out.data_ptr(),
+            M,
+            K,
+            N,
+            stream
+        );
+    } else {
+        launch_wmma_projection_bf16(
+            X.data_ptr(),
+            W.data_ptr(),
+            out.data_ptr(),
+            M,
+            K,
+            N,
+            stream
+        );
+    }
     return out;
 }
 

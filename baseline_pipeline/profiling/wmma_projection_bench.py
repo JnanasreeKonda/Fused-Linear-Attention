@@ -73,6 +73,7 @@ def main():
     parser.add_argument("--out", default="results/wmma_projection_bench.csv")
     parser.add_argument("--warmup", type=int, default=50)
     parser.add_argument("--timed", type=int, default=200)
+    parser.add_argument("--dtype", default="both", choices=["float16", "bfloat16", "both"])
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
@@ -85,33 +86,43 @@ def main():
     embed_dim = config.EMBED_DIM_BENCH
     head_dim = config.D_HEAD
 
-    for seq_len in config.SEQ_LENGTHS:
-        M = seq_len
-        K = embed_dim
-        N = head_dim
-        X = torch.randn(M, K, device=device, dtype=torch.float16)
-        W = torch.randn(K, N, device=device, dtype=torch.float16) * 0.02
+    dtypes = []
+    if args.dtype == "both":
+        dtypes = [torch.float16, torch.bfloat16]
+    elif args.dtype == "float16":
+        dtypes = [torch.float16]
+    else:
+        dtypes = [torch.bfloat16]
 
-        result = benchmark_once(X, W, args.warmup, args.timed)
-        row = {
-            "seq_len": seq_len,
-            "M": M,
-            "K": K,
-            "N": N,
-            "wmma_us": round(result["wmma_us"], 4),
-            "torch_us": round(result["torch_us"], 4),
-            "speedup_vs_torch": round(result["torch_us"] / result["wmma_us"], 4),
-            "max_abs_diff": result["max_abs_diff"],
-            "mean_abs_diff": result["mean_abs_diff"],
-        }
-        rows.append(row)
-        print(
-            f"seq_len={seq_len:>5}  "
-            f"wmma={row['wmma_us']:8.2f} us  "
-            f"torch={row['torch_us']:8.2f} us  "
-            f"speedup={row['speedup_vs_torch']:6.3f}x  "
-            f"max_diff={row['max_abs_diff']:.3e}"
-        )
+    for torch_dtype in dtypes:
+        for seq_len in config.SEQ_LENGTHS:
+            M = seq_len
+            K = embed_dim
+            N = head_dim
+            X = torch.randn(M, K, device=device, dtype=torch_dtype)
+            W = (torch.randn(K, N, device=device, dtype=torch.float32) * 0.02).to(torch_dtype)
+
+            result = benchmark_once(X, W, args.warmup, args.timed)
+            row = {
+                "dtype": str(torch_dtype).replace("torch.", ""),
+                "seq_len": seq_len,
+                "M": M,
+                "K": K,
+                "N": N,
+                "wmma_us": round(result["wmma_us"], 4),
+                "torch_us": round(result["torch_us"], 4),
+                "speedup_vs_torch": round(result["torch_us"] / result["wmma_us"], 4),
+                "max_abs_diff": result["max_abs_diff"],
+                "mean_abs_diff": result["mean_abs_diff"],
+            }
+            rows.append(row)
+            print(
+                f"dtype={row['dtype']:<8} seq_len={seq_len:>5}  "
+                f"wmma={row['wmma_us']:8.2f} us  "
+                f"torch={row['torch_us']:8.2f} us  "
+                f"speedup={row['speedup_vs_torch']:6.3f}x  "
+                f"max_diff={row['max_abs_diff']:.3e}"
+            )
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", newline="") as f:
