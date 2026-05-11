@@ -35,14 +35,36 @@ except ImportError:
 
 
 DEFAULT_TILE_SIZE = int(os.environ.get("FLA_TILE_SIZE", "64"))
+DEFAULT_KERNEL_DTYPE = os.environ.get("FLA_KERNEL_DTYPE", "float32").lower()
+def _default_proj_k_tile() -> int:
+    override = os.environ.get("FLA_PROJ_K_TILE")
+    if override:
+        return int(override)
+    return 16 if DEFAULT_KERNEL_DTYPE == "bfloat16" else 8
+
+
+DEFAULT_PROJ_K_TILE = _default_proj_k_tile()
+
+
+def _torch_dtype_from_name(name: str) -> torch.dtype:
+    normalized = name.lower()
+    if normalized in {"float16", "fp16", "f16", "half"}:
+        return torch.float16
+    if normalized in {"bfloat16", "bf16"}:
+        return torch.bfloat16
+    if normalized in {"float32", "fp32", "f32"}:
+        return torch.float32
+    raise ValueError(f"Unsupported kernel dtype: {name}")
 
 
 class FusedQKVAttentionSimulated(nn.Module):
-    def __init__(self, embed_dim: int, n_heads: int):
+    def __init__(self, embed_dim: int, n_heads: int, kernel_dtype: str = "float32"):
         super().__init__()
         assert embed_dim % n_heads == 0
         self.n_heads = n_heads
         self.d_head = embed_dim // n_heads
+        self.kernel_dtype = kernel_dtype
+        self.input_dtype = torch.float32
 
         self.Wq = nn.Parameter(torch.randn(embed_dim, embed_dim) * 0.02)
         self.Wk = nn.Parameter(torch.randn(embed_dim, embed_dim) * 0.02)
@@ -59,29 +81,38 @@ class FusedQKVAttentionSimulated(nn.Module):
 
 
 class FusedQKVAttentionKernel(nn.Module):
-    def __init__(self, embed_dim: int, n_heads: int):
+    def __init__(self, embed_dim: int, n_heads: int, kernel_dtype: str = "float32"):
         super().__init__()
         assert embed_dim % n_heads == 0
         self.n_heads = n_heads
         self.d_head = embed_dim // n_heads
         self.tile_size = DEFAULT_TILE_SIZE
+        self.proj_k_tile = DEFAULT_PROJ_K_TILE
+        self.kernel_dtype = kernel_dtype
+        self.input_dtype = _torch_dtype_from_name(kernel_dtype)
 
-        self.Wq = nn.Parameter(torch.randn(embed_dim, embed_dim) * 0.02)
-        self.Wk = nn.Parameter(torch.randn(embed_dim, embed_dim) * 0.02)
-        self.Wv = nn.Parameter(torch.randn(embed_dim, embed_dim) * 0.02)
+        self.Wq = nn.Parameter((torch.randn(embed_dim, embed_dim) * 0.02).to(self.input_dtype))
+        self.Wk = nn.Parameter((torch.randn(embed_dim, embed_dim) * 0.02).to(self.input_dtype))
+        self.Wv = nn.Parameter((torch.randn(embed_dim, embed_dim) * 0.02).to(self.input_dtype))
         self._kernel = None
 
     def _get_kernel(self):
         if self._kernel is None:
             from kernel.load_kernel import load_fused_kernel
 
-            self._kernel = load_fused_kernel(head_dim=self.d_head, tile_size=self.tile_size)
+            self._kernel = load_fused_kernel(
+                head_dim=self.d_head,
+                tile_size=self.tile_size,
+                kernel_dtype=self.kernel_dtype,
+                proj_k_tile=self.proj_k_tile,
+            )
         return self._kernel
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, N, D = x.shape
+        x_kernel = x.contiguous().to(self.input_dtype)
         return self._get_kernel().forward(
-            x.contiguous(),
+            x_kernel,
             self.Wq.contiguous(),
             self.Wk.contiguous(),
             self.Wv.contiguous(),
@@ -103,7 +134,8 @@ def benchmark_one(
     timed: int,
     run_mode: str,
 ) -> dict:
-    x = torch.randn(batch_size, seq_len, embed_dim, device=device, dtype=torch.float32)
+    input_dtype = getattr(model, "input_dtype", torch.float32)
+    x = torch.randn(batch_size, seq_len, embed_dim, device=device, dtype=input_dtype)
 
     with torch.no_grad():
         for _ in range(warmup):
@@ -141,9 +173,10 @@ def benchmark_one(
 
     d_head = embed_dim // config.N_HEADS_BENCH
     n_heads = config.N_HEADS_BENCH
-    fp32_bytes = 4
-    hbm_read = (batch_size * seq_len * embed_dim + 3 * embed_dim * n_heads * d_head) * fp32_bytes
-    hbm_write = (batch_size * n_heads * seq_len * d_head) * fp32_bytes
+    storage_bytes = 2 if input_dtype in {torch.float16, torch.bfloat16} else 4
+    output_bytes = 4
+    hbm_read = (batch_size * seq_len * embed_dim + 3 * embed_dim * n_heads * d_head) * storage_bytes
+    hbm_write = (batch_size * n_heads * seq_len * d_head) * output_bytes
 
     return {
         "method": "fused_kernel",
@@ -168,6 +201,8 @@ def benchmark_one(
             if isinstance(model, FusedQKVAttentionKernel)
             else "simulate_reference"
         ),
+        "kernel_dtype": str(input_dtype).replace("torch.", ""),
+        "proj_k_tile": getattr(model, "proj_k_tile", DEFAULT_PROJ_K_TILE),
     }
 
 
@@ -206,6 +241,8 @@ def main():
     parser.add_argument("--seq-len", type=int, default=None)
     parser.add_argument("--warmup", type=int, default=config.WARMUP_ITERS)
     parser.add_argument("--timed", type=int, default=config.TIMED_ITERS)
+    parser.add_argument("--kernel-dtype", default=DEFAULT_KERNEL_DTYPE, choices=["float32", "float16", "bfloat16"])
+    parser.add_argument("--proj-k-tile", type=int, default=DEFAULT_PROJ_K_TILE, choices=[8, 16, 32])
     args = parser.parse_args()
 
     device = torch.device("cpu" if (args.no_cuda or not torch.cuda.is_available()) else "cuda")
@@ -215,19 +252,22 @@ def main():
     seq_lens = [args.seq_len] if args.seq_len else config.SEQ_LENGTHS
 
     if args.simulate:
-        model = FusedQKVAttentionSimulated(embed_dim, n_heads).to(device).eval()
+        model = FusedQKVAttentionSimulated(embed_dim, n_heads, kernel_dtype=args.kernel_dtype).to(device).eval()
         run_mode = "simulation"
         print("[fused_bench] Mode: PyTorch simulation")
     else:
         if device.type != "cuda":
             raise RuntimeError("Compiled fused kernel requires CUDA. Use --simulate for CPU validation.")
-        model = FusedQKVAttentionKernel(embed_dim, n_heads).to(device).eval()
-        dummy = torch.randn(1, 64, embed_dim, device=device)
+        model = FusedQKVAttentionKernel(embed_dim, n_heads, kernel_dtype=args.kernel_dtype).to(device).eval()
+        model.proj_k_tile = args.proj_k_tile
+        dummy = torch.randn(1, 64, embed_dim, device=device, dtype=model.input_dtype)
         with torch.no_grad():
             _ = model(dummy)
         run_mode = "cuda_kernel"
         print("[fused_bench] Mode: compiled CUDA kernel")
         print(f"[fused_bench] Tile size : {model.tile_size}")
+        print(f"[fused_bench] Kernel dtype: {args.kernel_dtype}")
+        print(f"[fused_bench] Proj K tile: {model.proj_k_tile}")
 
     print(f"[fused_bench] Device    : {device}")
     if device.type == "cuda":

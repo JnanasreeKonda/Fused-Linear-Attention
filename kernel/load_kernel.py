@@ -49,7 +49,43 @@ def _default_tile_size() -> int:
     return 32
 
 
-def load_fused_kernel(head_dim: int = 64, tile_size: Optional[int] = None):
+def _default_proj_k_tile(kernel_dtype: Optional[str] = None) -> int:
+    override = os.environ.get("FLA_PROJ_K_TILE")
+    if override:
+        return int(override)
+    normalized_dtype = _normalize_kernel_dtype(kernel_dtype)
+    if normalized_dtype == "bfloat16":
+        return 16
+    return 8
+
+
+def _normalize_kernel_dtype(kernel_dtype: Optional[str]) -> str:
+    value = kernel_dtype or os.environ.get("FLA_KERNEL_DTYPE", "float32")
+    normalized = value.lower()
+    aliases = {
+        "fp32": "float32",
+        "float32": "float32",
+        "f32": "float32",
+        "fp16": "float16",
+        "float16": "float16",
+        "f16": "float16",
+        "half": "float16",
+        "bf16": "bfloat16",
+        "bfloat16": "bfloat16",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            f"Unsupported kernel dtype '{value}'. Expected one of: float32, float16, bfloat16."
+        )
+    return aliases[normalized]
+
+
+def load_fused_kernel(
+    head_dim: int = 64,
+    tile_size: Optional[int] = None,
+    kernel_dtype: Optional[str] = None,
+    proj_k_tile: Optional[int] = None,
+):
     """
     JIT-compile the CUDA extension and return the loaded module.
 
@@ -62,7 +98,10 @@ def load_fused_kernel(head_dim: int = 64, tile_size: Optional[int] = None):
     global _kernel_cache
     if tile_size is None:
         tile_size = _default_tile_size()
-    cache_key = (int(head_dim), int(tile_size))
+    normalized_dtype = _normalize_kernel_dtype(kernel_dtype)
+    if proj_k_tile is None:
+        proj_k_tile = _default_proj_k_tile(normalized_dtype)
+    cache_key = (int(head_dim), int(tile_size), int(proj_k_tile), normalized_dtype)
     if cache_key in _kernel_cache:
         return _kernel_cache[cache_key]
 
@@ -72,7 +111,14 @@ def load_fused_kernel(head_dim: int = 64, tile_size: Optional[int] = None):
     cu_file = os.path.join(root, "kernel", "fused_attn.cu")
     cpp_file = os.path.join(root, "kernel", "fused_attn_ext.cpp")
     build_dir = os.path.join(root, "build")
-    module_name = f"fused_linear_attention_hd{head_dim}_tile{tile_size}"
+    dtype_tag = "f32"
+    if normalized_dtype == "float16":
+        dtype_tag = "f16"
+    elif normalized_dtype == "bfloat16":
+        dtype_tag = "bf16"
+    module_name = (
+        f"fused_linear_attention_hd{head_dim}_tile{tile_size}_proj{proj_k_tile}_{dtype_tag}"
+    )
 
     for path in (cu_file, cpp_file):
         if not os.path.exists(path):
@@ -89,9 +135,9 @@ def load_fused_kernel(head_dim: int = 64, tile_size: Optional[int] = None):
         "--use_fast_math",
         f"-DTILE_SIZE={int(tile_size)}",
         f"-DHEAD_DIM={int(head_dim)}",
+        f"-DPROJ_K_TILE={int(proj_k_tile)}",
     ]
 
-    # Older cluster toolkits can reject newer host GCC versions by default.
     if os.environ.get("FLA_ALLOW_UNSUPPORTED_COMPILER", "1") == "1":
         extra_cuda_cflags.append("-allow-unsupported-compiler")
 
