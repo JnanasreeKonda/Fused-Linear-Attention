@@ -280,17 +280,20 @@ If this project is extended further, the highest-return next steps are:
 
 ### Jnanasree Konda
 
-- fused-attention NumPy oracle and correctness work
-- PyTorch extension interface
-- kernel validation and GPU experiment integration
+- CUDA kernel implementation
+- Mixed-precision templates
+- Correctness suites (Levels 2–3)
 
 ### Bhanuja Karumuru
 
-- fused kernel design and CUDA implementation
-- profiling pipeline, result merge, and figure generation
+- Tiling strategy
+- Shared-memory design
+- HBM model, NumPy oracle
+- WMMA benchmarking
 
 ### Rithwik Amajala
 
-- ETTh1 pipeline
-- PatchTST baseline, training, and evaluation
-- Phase 3 model-side integration and validation workflow
+- PyTorch integration
+- Autograd bridge
+- Backend dispatch
+- Microbenchmark harness
