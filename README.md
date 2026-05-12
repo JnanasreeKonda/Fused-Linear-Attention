@@ -1,22 +1,19 @@
 # FusedLinearAttention
 
 FusedLinearAttention is an HPML course project on reducing transformer
-attention overhead on GPU. We started with the classic systems idea of fusing
-Q/K/V projection and scaled dot-product attention into one CUDA kernel, then
-iterated toward faster practical variants on H100.
+attention overhead on GPU. The current best implementation in this repository
+is a custom warp-cooperative attention kernel that works with optimized
+PyTorch projection on H100.
 
 The repo now contains:
 
 - a complete ETTh1 + PatchTST baseline pipeline
-- a canonical fully fused CUDA extension path under `kernel/`
-- newer hybrid and warp-cooperative custom attention backends
+- custom CUDA attention backends under `kernel/`
 - correctness, profiling, validation, and figure-generation workflows
 - result artifacts under
   [baseline_pipeline/results](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results)
 
-The short version: the original fully fused kernel is **correct** and
-**reduces estimated HBM traffic**, but it is still slower than the PyTorch
-baseline. The current fastest custom path in this repo is the
+The short version: the current fastest custom path in this repo is the
 `hybrid_warp4` backend, which keeps projection on the optimized PyTorch side
 and uses our warp-cooperative CUDA kernel for the attention step.
 
@@ -27,11 +24,11 @@ The unfused attention path does this in two stages:
 1. project input tokens into `Q`, `K`, and `V`
 2. read those intermediates back to run attention
 
-The fused kernel aims to:
+The project aims to:
 
 - reduce kernel launches
 - reduce global-memory traffic
-- avoid materializing full `Q/K/V` tensors in HBM
+- reduce costly memory movement through HBM
 
 ## Current Status
 
@@ -45,13 +42,11 @@ The fused kernel aims to:
 - fused profiling pipeline
 - Phase 3 end-to-end validation pipeline
 - H100 compiled-kernel correctness run
-- H100 fused-vs-baseline profiling run
+- H100 custom-kernel vs baseline profiling run
 - H100 mixed-precision hybrid and warp-cooperative tuning runs
 
 ### What is still not ideal
 
-- the original fully fused kernel does **not** beat the unfused PyTorch
-  baseline on H100
 - the best custom backend beats baseline only at smaller sequence lengths
 - end-to-end custom-attention model quality is still worse than baseline
 - backward is still a custom autograd bridge, not a handwritten fused CUDA
@@ -97,21 +92,7 @@ Source files:
 - [endtoend_timing.csv](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/endtoend_timing.csv)
 - [correctness_results.csv](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/correctness_results.csv)
 
-### 1. Original fully fused kernel vs baseline
-
-| Seq Len | Baseline (`us`) | Fused (`us`) | Fused vs Baseline |
-| --- | ---: | ---: | ---: |
-| 64 | 109.7448 | 872.0335 | 0.1258x |
-| 128 | 109.1533 | 1422.1433 | 0.0768x |
-| 256 | 108.9229 | 2532.7407 | 0.0430x |
-| 512 | 118.5030 | 4737.3379 | 0.0250x |
-| 1024 | 198.5365 | 9124.8203 | 0.0218x |
-
-This is the result that best demonstrates the original fusion idea: lower
-kernel count and lower estimated HBM traffic, but not enough compute
-efficiency to beat PyTorch.
-
-### 2. Best current custom backend vs baseline
+### 1. Final custom backend vs baseline
 
 Our fastest current path is:
 
@@ -136,7 +117,7 @@ So the latest kernel work materially improved the repo:
 - it is still slower at `N>=256`
 - it is dramatically faster than the original fully fused kernel
 
-### 3. Forecast metrics
+### 2. Forecast metrics
 
 | Model | MSE | MAE |
 | --- | ---: | ---: |
@@ -148,29 +129,23 @@ Delta vs baseline:
 - MSE: `+18.35603352%`
 - MAE: `+6.86042142%`
 
-### 4. End-to-end timing
+### 3. End-to-end timing
 
 | Model | Mean Epoch Time (`s`) | Forward / iter (`ms`) |
 | --- | ---: | ---: |
 | Baseline | 1.8825 | 0.516714 |
 | Custom attention path | 2.5510 | 0.777603 |
 
-### 5. Correctness
+### 4. Correctness
 
 - `11 / 11` CUDA correctness cases passed
 - max abs diff stayed on the order of `1e-7`
 
 ## Memory Story
 
-There are two different memory stories in this repo.
-
-The original fully fused kernel gives the cleanest fusion argument because it
-avoids materializing full `Q/K/V` tensors in HBM. That is why its estimated
-HBM-read reduction grows from `10.71%` at `N=64` to `54.55%` at `N=1024`.
-
-The final fastest kernel is a hybrid design, so it does **not** remove
-`Q/K/V` materialization in the same way. Its lower analytic HBM footprint comes
-mainly from using `bf16` for input, weights, and projected tensors.
+The final fastest kernel is a hybrid design. It still uses normal projection,
+but it lowers the analytic HBM footprint mainly through `bf16` storage for the
+input, weights, and projected tensors.
 
 For the benchmark shape used here, the final hybrid kernel's analytic memory
 breakdown is:
@@ -280,20 +255,21 @@ The H100 run used:
 - `TORCH_CUDA_ARCH_LIST=9.0`
 - compiled extension path via [kernel/load_kernel.py](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/kernel/load_kernel.py)
 
-## Why The Original Fully Fused Kernel Is Still Slower
+## Why The Final Kernel Is Still Slower At Larger Sequence Lengths
 
-Even after the successful optimizations, the current fused kernel still loses to
-the PyTorch baseline because:
+Even after the successful optimizations, the current custom kernel still loses to
+the PyTorch baseline at larger sequence lengths because:
 
-- Q/K/V projection is still implemented as scalar fp32 loops inside the kernel
-- the baseline uses highly optimized library kernels
-- reduced HBM traffic is being outweighed by compute inefficiency
+- the baseline still uses extremely optimized library kernels end to end
+- the custom attention stage is much better than before, but still not as
+  hardware-efficient at `N>=256`
+- the model path still uses a recomputation-based backward bridge during training
 
-That kernel is therefore:
+The final kernel is therefore:
 
 - **correct**
 - **more memory-efficient on paper**
-- **not yet compute-efficient enough to win on H100**
+- **not yet consistently compute-efficient enough to win on H100**
 
 ## Best Current Optimization State
 
