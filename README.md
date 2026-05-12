@@ -159,23 +159,6 @@ These newer graph assets are included in
 - [baseline_vs_final_time.svg](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/baseline_vs_final_time.svg)
 - [baseline_vs_final_memory_breakdown.svg](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/baseline_vs_final_memory_breakdown.svg)
 
-## Generated Figures
-
-The main charts are already in
-[baseline_pipeline/results/figures](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures):
-
-- [speedup.png](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/speedup.png)
-- [wall_time_speedup.png](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/wall_time_speedup.png)
-- [hbm_bandwidth.png](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/hbm_bandwidth.png)
-- [kernel_count.png](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/kernel_count.png)
-- [occupancy_vs_tile.png](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/occupancy_vs_tile.png)
-- [occupancy_vs_tile_tradeoff.png](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/occupancy_vs_tile_tradeoff.png)
-- [nsight_timeline_comparison.png](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/nsight_timeline_comparison.png)
-
-There is also a detailed written report here:
-
-- [baseline_pipeline/final_report.md](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/final_report.md)
-
 ## How To Run
 
 ### 1. Baseline pipeline
