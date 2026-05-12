@@ -1,19 +1,24 @@
 # FusedLinearAttention
 
-FusedLinearAttention is an HPML course project on collapsing Q, K, and V
-projection plus scaled dot-product attention into a single CUDA kernel. The
-repo now contains:
+FusedLinearAttention is an HPML course project on reducing transformer
+attention overhead on GPU. We started with the classic systems idea of fusing
+Q/K/V projection and scaled dot-product attention into one CUDA kernel, then
+iterated toward faster practical variants on H100.
+
+The repo now contains:
 
 - a complete ETTh1 + PatchTST baseline pipeline
-- a canonical CUDA extension path under `kernel/`
+- a canonical fully fused CUDA extension path under `kernel/`
+- newer hybrid and warp-cooperative custom attention backends
 - correctness, profiling, validation, and figure-generation workflows
-- final H100 experiment artifacts under
+- result artifacts under
   [baseline_pipeline/results](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results)
 
-The short version: the fused kernel is **correct** and it **reduces estimated
-HBM traffic**, but on the current implementation it is still **slower than the
-PyTorch baseline** on H100 because the kernel is still dominated by scalar fp32
-projection work.
+The short version: the original fully fused kernel is **correct** and
+**reduces estimated HBM traffic**, but it is still slower than the PyTorch
+baseline. The current fastest custom path in this repo is the
+`hybrid_warp4` backend, which keeps projection on the optimized PyTorch side
+and uses our warp-cooperative CUDA kernel for the attention step.
 
 ## Project Goal
 
@@ -28,7 +33,7 @@ The fused kernel aims to:
 - reduce global-memory traffic
 - avoid materializing full `Q/K/V` tensors in HBM
 
-## Final Status
+## Current Status
 
 ### What is complete
 
@@ -41,11 +46,14 @@ The fused kernel aims to:
 - Phase 3 end-to-end validation pipeline
 - H100 compiled-kernel correctness run
 - H100 fused-vs-baseline profiling run
+- H100 mixed-precision hybrid and warp-cooperative tuning runs
 
 ### What is still not ideal
 
-- the fused kernel does **not** beat the unfused PyTorch baseline on H100
-- end-to-end fused model quality is worse than baseline
+- the original fully fused kernel does **not** beat the unfused PyTorch
+  baseline on H100
+- the best custom backend beats baseline only at smaller sequence lengths
+- end-to-end custom-attention model quality is still worse than baseline
 - backward is still a custom autograd bridge, not a handwritten fused CUDA
   backward kernel
 
@@ -64,6 +72,8 @@ The fused kernel aims to:
 - `fused_attn.cu`
 - `fused_attn_ext.cpp`
 - `load_kernel.py`
+- `attn_only.cu`
+- `attn_only_warp4.cu`
 - kernel design notes
 
 ### [tests/](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/tests)
@@ -78,7 +88,7 @@ The fused kernel aims to:
 - golden outputs
 - reference comparison utilities
 
-## Final H100 Results
+## H100 Results
 
 Source files:
 
@@ -87,7 +97,7 @@ Source files:
 - [endtoend_timing.csv](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/endtoend_timing.csv)
 - [correctness_results.csv](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/correctness_results.csv)
 
-### Forward microbenchmark
+### 1. Original fully fused kernel vs baseline
 
 | Seq Len | Baseline (`us`) | Fused (`us`) | Fused vs Baseline |
 | --- | ---: | ---: | ---: |
@@ -97,24 +107,82 @@ Source files:
 | 512 | 118.5030 | 4737.3379 | 0.0250x |
 | 1024 | 198.5365 | 9124.8203 | 0.0218x |
 
-### Forecast metrics
+This is the result that best demonstrates the original fusion idea: lower
+kernel count and lower estimated HBM traffic, but not enough compute
+efficiency to beat PyTorch.
+
+### 2. Best current custom backend vs baseline
+
+Our fastest current path is:
+
+- backend: `hybrid_warp4`
+- kernel dtype: `bfloat16`
+- query-group size: `2`
+
+H100 forward microbenchmark:
+
+| Seq Len | Baseline (`us`) | Final Custom Kernel (`us`) | Final vs Baseline |
+| --- | ---: | ---: | ---: |
+| 64 | 107.2 | 88.0 | 1.22x |
+| 128 | 142.1 | 100.5 | 1.41x |
+| 256 | 127.2 | 164.2 | 0.77x |
+| 512 | 121.6 | 293.3 | 0.41x |
+| 1024 | 200.7 | 556.4 | 0.36x |
+
+So the latest kernel work materially improved the repo:
+
+- it beats baseline at `N=64`
+- it beats baseline at `N=128`
+- it is still slower at `N>=256`
+- it is dramatically faster than the original fully fused kernel
+
+### 3. Forecast metrics
 
 | Model | MSE | MAE |
 | --- | ---: | ---: |
 | Baseline | 180.46336365 | 12.64666843 |
-| Fused | 213.44288635 | 13.50915241 |
+| Custom attention path | 213.58927917 | 13.51428318 |
 
 Delta vs baseline:
 
-- MSE: `+18.274913%`
-- MAE: `+6.81985129%`
+- MSE: `+18.35603352%`
+- MAE: `+6.86042142%`
 
-### End-to-end timing
+### 4. End-to-end timing
 
 | Model | Mean Epoch Time (`s`) | Forward / iter (`ms`) |
 | --- | ---: | ---: |
-| Baseline | 1.8825 | 0.544459 |
-| Fused | 2.5510 | 0.633303 |
+| Baseline | 1.8825 | 0.516714 |
+| Custom attention path | 2.5510 | 0.777603 |
+
+### 5. Correctness
+
+- `11 / 11` CUDA correctness cases passed
+- max abs diff stayed on the order of `1e-7`
+
+## Memory Story
+
+There are two different memory stories in this repo.
+
+The original fully fused kernel gives the cleanest fusion argument because it
+avoids materializing full `Q/K/V` tensors in HBM. That is why its estimated
+HBM-read reduction grows from `10.71%` at `N=64` to `54.55%` at `N=1024`.
+
+The final fastest kernel is a hybrid design, so it does **not** remove
+`Q/K/V` materialization in the same way. Its lower analytic HBM footprint comes
+mainly from using `bf16` for input, weights, and projected tensors.
+
+For the benchmark shape used here, the final hybrid kernel's analytic memory
+breakdown is:
+
+- estimated HBM reads: about `50%` lower than the fp32 baseline
+- estimated HBM writes: about `37.5%` lower than the fp32 baseline
+
+These newer graph assets are included in
+[baseline_pipeline/results/figures](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures):
+
+- [baseline_vs_final_time.svg](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/baseline_vs_final_time.svg)
+- [baseline_vs_final_memory_breakdown.svg](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/baseline_pipeline/results/figures/baseline_vs_final_memory_breakdown.svg)
 
 ## Generated Figures
 
@@ -180,6 +248,16 @@ cd baseline_pipeline
 ./run_phase3.sh --train-fused
 ```
 
+To run the newer best custom backend in the model path:
+
+```bash
+cd baseline_pipeline
+export FLA_ATTN_BACKEND=hybrid_warp4
+export FLA_KERNEL_DTYPE=bfloat16
+export FLA_Q_GROUP_SIZE=2
+python model/end_to_end_validate.py --train-fused
+```
+
 ### 5. Full helper
 
 ```bash
@@ -202,7 +280,7 @@ The H100 run used:
 - `TORCH_CUDA_ARCH_LIST=9.0`
 - compiled extension path via [kernel/load_kernel.py](/Users/jnanasreekonda/PycharmProjects/Fused-Linear-Attention/kernel/load_kernel.py)
 
-## Why The Fused Kernel Is Still Slower
+## Why The Original Fully Fused Kernel Is Still Slower
 
 Even after the successful optimizations, the current fused kernel still loses to
 the PyTorch baseline because:
@@ -211,7 +289,7 @@ the PyTorch baseline because:
 - the baseline uses highly optimized library kernels
 - reduced HBM traffic is being outweighed by compute inefficiency
 
-The kernel is therefore:
+That kernel is therefore:
 
 - **correct**
 - **more memory-efficient on paper**
@@ -219,25 +297,24 @@ The kernel is therefore:
 
 ## Best Current Optimization State
 
-The best version in the repo right now includes:
+The best current custom backend in the repo now includes:
 
-- block-per-query-tile launch structure
-- dynamic shared memory
-- projection tiling through shared memory
-- architecture-aware compilation
-- a small launch-bounds hint
+- `hybrid_warp4` attention backend
+- `bfloat16` inputs / weights / projected tensors
+- warp-cooperative query processing
+- tuned query-group size `2`
+- vectorized row loads and inner-loop attention math
 
-That version is much faster than the older fused kernel revisions that were
-committed earlier in the branch, even though it still trails the baseline.
+This backend is the one to use when you want the fastest current custom
+implementation in this repository.
 
 ## Recommended Next Work
 
 If this project is extended further, the highest-return next steps are:
 
-1. replace scalar projection loops with tensor-core-friendly MMA tiling
-2. move toward fp16/bf16 compute paths
-3. redesign work partitioning at the warp level for projection and score
-   accumulation
+1. profile the final hybrid kernel with real hardware counters using Nsight
+2. continue warp-level tuning for the `hybrid_warp4` backend at `N>=256`
+3. redesign the attention stage to be even more Tensor-Core-friendly
 4. implement a true fused CUDA backward kernel
 
 ## Team Contributions

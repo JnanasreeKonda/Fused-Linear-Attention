@@ -3,6 +3,8 @@ baseline_pipeline/data/
 baseline_pipeline/results/*.pt
 baseline_pipeline/results/*.csv
 baseline_pipeline/results/figures/
+!baseline_pipeline/results/figures/baseline_vs_final_time.svg
+!baseline_pipeline/results/figures/baseline_vs_final_memory_breakdown.svg
 baseline_pipeline/.matplotlib-cache/
 /results/
 __pycache__/
